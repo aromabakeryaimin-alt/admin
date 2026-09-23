@@ -86,10 +86,10 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // 批量新增班次
+        // 批量新增班次 (已修復時區偏移問題)
         window.batchAddSchedules = async function() {
-            const origin = document.getElementById('origin').value;
-            const dest = document.getElementById('destination').value;
+            const origin = document.getElementById('origin').value.trim();
+            const dest = document.getElementById('destination').value.trim();
             const startDateStr = document.getElementById('startDate').value;
             const endDateStr = document.getElementById('endDate').value;
             const timeStr = document.getElementById('times').value;
@@ -108,7 +108,12 @@
             msg.innerHTML = "<span style='color:#2563eb;'>正在生成班次中...</span>";
 
             while(currentD <= endD) {
-                const dateString = currentD.toISOString().split('T')[0];
+                // 手動組合日期字串，避免因瀏覽器時區造成日期少一天
+                const year = currentD.getFullYear();
+                const month = String(currentD.getMonth() + 1).padStart(2, '0');
+                const day = String(currentD.getDate()).padStart(2, '0');
+                const dateString = `${year}-${month}-${day}`;
+                
                 for(let time of times) {
                     const newRef = push(ref(db, 'schedules'));
                     await set(newRef, { id: newRef.key, origin, destination: dest, date: dateString, time, price, createdAt: Date.now() });
@@ -124,6 +129,8 @@
             const resultBox = document.getElementById('scanResult');
             resultBox.style.display = 'block';
             if(!ticketId) { resultBox.className = 'result-box error'; resultBox.innerHTML = "請輸入票號"; return; }
+
+            resultBox.innerHTML = "驗證中..."; 
 
             get(child(ref(db), `tickets/${ticketId}`)).then((snapshot) => {
                 if (snapshot.exists()) {
@@ -147,7 +154,15 @@
             });
         };
 
-        function onScanSuccess(decodedText) { window.verifyTicket(decodedText.trim()); }
+        // 加入防抖與冷卻機制，防止鏡頭持續對準 QR Code 時發生連續多次扣減
+        let lastScanTime = 0;
+        function onScanSuccess(decodedText) { 
+            const now = Date.now();
+            if (now - lastScanTime < 3000) return; // 3秒內不重複觸發
+            lastScanTime = now;
+            window.verifyTicket(decodedText.trim()); 
+        }
+        
         let scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
         scanner.render(onScanSuccess);
     </script>
