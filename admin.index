@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>班次與掃碼上車系統 (管理員)</title>
+    <!-- 引入 QR Code 掃描庫 -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        .section { margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px dashed #ccc; }
+        input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        button { background-color: #007BFF; color: white; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
+        button:hover { background-color: #0056b3; }
+        #reader { width: 100%; max-width: 400px; margin: 10px auto; }
+        .success { color: green; font-weight: bold; font-size: 1.2em; }
+        .error { color: red; font-weight: bold; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 區塊 1：新增班次 -->
+        <div class="section">
+            <h2>新增班次 (管理者)</h2>
+            <input type="text" id="origin" placeholder="出發地 (例: 旺角)">
+            <input type="text" id="destination" placeholder="目的地 (例: 尖沙咀)">
+            <input type="date" id="date">
+            <input type="time" id="time">
+            <input type="number" id="price" placeholder="成人價格 ($)">
+            <button onclick="window.addSchedule()">發佈班次到 Firebase</button>
+            <div id="scheduleMsg"></div>
+        </div>
+
+        <!-- 區塊 2：二維碼上車驗證 -->
+        <div class="section">
+            <h2>二維碼驗證上車系統</h2>
+            <p>請掃描乘客的 QR Code 或手動輸入票號：</p>
+            <div id="reader"></div>
+            <input type="text" id="manualTicketId" placeholder="輸入車票編號 (如 TKT-123456)">
+            <button onclick="window.verifyTicket(document.getElementById('manualTicketId').value.trim())">手動核銷</button>
+            <div id="scanResult"></div>
+        </div>
+    </div>
+
+    <!-- 將 type 設為 module 以支援 import 語法 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, push, set, get, child, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // 你的 Firebase 設定
+        const firebaseConfig = {
+            apiKey: "AIzaSyCq_8FSy5JU9-ETd1F3whQHwXC_fY1uqdo",
+            authDomain: "admin-bus2026.firebaseapp.com",
+            databaseURL: "https://admin-bus2026-default-rtdb.firebaseio.com",
+            projectId: "admin-bus2026",
+            storageBucket: "admin-bus2026.firebasestorage.app",
+            messagingSenderId: "465878874061",
+            appId: "1:465878874061:web:f967bd130caf9546abb684",
+            measurementId: "G-S9FFQH5DPK"
+        };
+
+        // 初始化 Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // 新增班次到 Firebase Realtime Database
+        window.addSchedule = function() {
+            const origin = document.getElementById('origin').value;
+            const destination = document.getElementById('destination').value;
+            const date = document.getElementById('date').value;
+            const time = document.getElementById('time').value;
+            const price = document.getElementById('price').value;
+
+            if(!origin || !destination || !date || !time || !price) {
+                alert("請填寫所有班次資訊！");
+                return;
+            }
+
+            const schedulesRef = ref(db, 'schedules');
+            const newScheduleRef = push(schedulesRef);
+            
+            set(newScheduleRef, {
+                id: newScheduleRef.key,
+                origin: origin,
+                destination: destination,
+                date: date,
+                time: time,
+                price: price,
+                createdAt: Date.now()
+            }).then(() => {
+                document.getElementById('scheduleMsg').innerHTML = `<span class="success">✅ 班次已成功同步至 Firebase！</span>`;
+                document.querySelectorAll('input').forEach(input => input.value = '');
+            }).catch(error => {
+                document.getElementById('scheduleMsg').innerHTML = `<span class="error">❌ 發佈失敗: ${error.message}</span>`;
+            });
+        }
+
+        // 驗證車票邏輯
+        window.verifyTicket = function(ticketId) {
+            const resultDiv = document.getElementById('scanResult');
+            if(!ticketId) return;
+
+            const dbRef = ref(db);
+            get(child(dbRef, `tickets/${ticketId}`)).then((snapshot) => {
+                if (snapshot.exists()) {
+                    const ticketData = snapshot.val();
+                    if (ticketData.used) {
+                        resultDiv.innerHTML = `<p class="error">❌ 警告：此車票已於之前使用過！<br>票號：${ticketId}</p>`;
+                    } else {
+                        // 更新為已使用狀態
+                        const ticketRef = ref(db, `tickets/${ticketId}`);
+                        update(ticketRef, { used: true, usedAt: Date.now() }).then(() => {
+                            resultDiv.innerHTML = `<p class="success">✅ 驗證成功！歡迎上車。<br>路線：${ticketData.routeInfo}</p>`;
+                        });
+                    }
+                } else {
+                    resultDiv.innerHTML = `<p class="error">❌ 無效車票：資料庫中查無此票號 (${ticketId})</p>`;
+                }
+            }).catch((error) => {
+                resultDiv.innerHTML = `<p class="error">❌ 查詢失敗: ${error.message}</p>`;
+            });
+        }
+
+        // 初始化相機掃描器
+        function onScanSuccess(decodedText) {
+            window.verifyTicket(decodedText.trim());
+        }
+        let html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+        html5QrcodeScanner.render(onScanSuccess);
+    </script>
+</body>
+</html>
