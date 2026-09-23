@@ -4,61 +4,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>車務智能管理與驗票系統</title>
-    <!-- Google Fonts & Font Awesome Icons -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root {
-            --primary: #4f46e5;
-            --primary-hover: #4338ca;
-            --bg: #f8fafc;
-            --surface: #ffffff;
-            --sidebar: #0f172a;
-            --text-main: #0f172a;
-            --text-muted: #64748b;
-            --border: #e2e8f0;
-            --success: #10b981;
-            --danger: #ef4444;
+            --primary: #4f46e5; --primary-hover: #4338ca; --bg: #f8fafc; --surface: #ffffff;
+            --sidebar: #0f172a; --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
+            --success: #10b981; --danger: #ef4444;
         }
-
         * { box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; }
         body { margin: 0; background: var(--bg); color: var(--text-main); display: flex; min-height: 100vh; }
 
-        /* Toast 浮動提示框 */
         .toast {
             position: fixed; top: -60px; left: 50%; transform: translateX(-50%);
             background: #1e293b; color: white; padding: 12px 24px; border-radius: 30px;
             font-size: 14px; font-weight: 500; box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-            z-index: 9999; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 9999; transition: all 0.3s ease;
         }
         .toast.show { top: 20px; }
 
-        /* 登入彈窗頁面 */
-        .auth-overlay {
-            position: fixed; inset: 0; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-            display: flex; justify-content: center; align-items: center; z-index: 1000;
-        }
-        .auth-card {
-            background: var(--surface); width: 100%; max-width: 400px; padding: 40px;
-            border-radius: 20px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3); text-align: center;
-        }
-        .auth-card h2 { margin: 0 0 10px 0; color: var(--text-main); }
+        /* 登入彈窗 */
+        .auth-overlay { position: fixed; inset: 0; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .auth-card { background: var(--surface); width: 100%; max-width: 400px; padding: 40px; border-radius: 20px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3); text-align: center; }
+        .auth-card h2 { margin: 0 0 10px 0; }
         .auth-card p { color: var(--text-muted); font-size: 14px; margin-bottom: 25px; }
 
         /* 控制台佈局 */
         .app-container { display: flex; width: 100vw; min-height: 100vh; }
-        .sidebar {
-            width: 260px; background: var(--sidebar); color: white; padding: 25px 20px;
-            display: flex; flex-direction: column; justify-content: space-between;
-        }
+        .sidebar { width: 260px; background: var(--sidebar); color: white; padding: 25px 20px; display: flex; flex-direction: column; justify-content: space-between; }
         .brand { font-size: 18px; font-weight: 700; color: #38bfa1; display: flex; align-items: center; gap: 10px; margin-bottom: 40px; }
         .nav-menu { display: flex; flex-direction: column; gap: 8px; }
-        .nav-btn {
-            display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 10px;
-            color: #94a3b8; background: transparent; border: none; font-size: 14px; font-weight: 600;
-            cursor: pointer; transition: 0.2s; text-align: left; width: 100%;
-        }
+        .nav-btn { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 10px; color: #94a3b8; background: transparent; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.2s; text-align: left; width: 100%; }
         .nav-btn:hover, .nav-btn.active { background: rgba(255,255,255,0.1); color: white; }
         .nav-btn.active { background: var(--primary); }
 
@@ -66,107 +43,87 @@
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
         .user-badge { background: #e0e7ff; color: var(--primary); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
 
-        /* 卡片與表單UI */
-        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
         .card { background: var(--surface); border-radius: 16px; padding: 25px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        .card h3 { margin-top: 0; font-size: 18px; color: var(--text-main); display: flex; align-items: center; gap: 10px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
         
         .form-group { margin-bottom: 18px; }
         .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
-        input, select {
-            width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 8px;
-            font-size: 14px; outline: none; transition: 0.2s;
-        }
-        input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); }
+        input { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; }
+        input:focus { border-color: var(--primary); }
 
-        .btn-primary {
-            width: 100%; background: var(--primary); color: white; border: none; padding: 12px;
-            border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: 0.2s;
-        }
-        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-primary { width: 100%; background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .btn-danger { background: var(--danger); color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; }
 
-        /* Excel 嵌入樣式 */
-        .excel-frame-container {
-            width: 100%; height: 550px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border);
-        }
-        iframe { width: 100%; height: 100%; border: none; }
+        /* 實時資料表樣式 (取代 Excel) */
+        .table-responsive { overflow-x: auto; margin-top: 15px; }
+        table { width: 100%; border-collapse: collapse; min-width: 800px; }
+        th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
+        th { background: #f8fafc; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+        tr:hover { background: #f1f5f9; }
+        .col-buyers { font-weight: bold; color: var(--primary); text-align: center; }
 
-        /* 掃描介面 */
         #reader { border-radius: 12px; overflow: hidden; border: none !important; }
-        .result-box { margin-top: 15px; padding: 15px; border-radius: 10px; font-weight: 600; text-align: center; }
+        .result-box { margin-top: 15px; padding: 15px; border-radius: 10px; font-weight: 600; text-align: center; display: none; }
         .result-box.success { background: #dcfce7; color: #15803d; }
         .result-box.error { background: #fee2e2; color: #b91c1c; }
-
-        @media (max-width: 768px) {
-            .app-container { flex-direction: column; }
-            .sidebar { width: 100%; padding: 15px; }
-            .grid-2 { grid-template-columns: 1fr; }
-        }
     </style>
 </head>
 <body>
 
     <div id="toastBox" class="toast"></div>
 
-    <!-- 1. 登入視窗 -->
     <div id="authOverlay" class="auth-overlay">
         <div class="auth-card">
             <h2>🚌 車務管理系統</h2>
-            <p>請輸入帳號密碼以進入系統</p>
-            <div class="form-group">
-                <input type="text" id="loginUser" placeholder="帳號 (Admin / P001)">
-            </div>
-            <div class="form-group">
-                <input type="password" id="loginPass" placeholder="密碼">
-            </div>
-            <button class="btn-primary" onclick="handleBackendLogin()">登入系統</button>
+            <p>請輸入帳號密碼</p>
+            <div class="form-group"><input type="text" id="loginUser" placeholder="帳號 (Admin / P001)"></div>
+            <div class="form-group"><input type="password" id="loginPass" placeholder="密碼"></div>
+            <button class="btn-primary" onclick="handleBackendLogin()">登入</button>
         </div>
     </div>
 
-    <!-- 2. 主控制台 -->
     <div class="app-container" id="mainDashboard" style="display: none;">
-        <!-- 側邊欄 -->
         <div class="sidebar">
             <div>
                 <div class="brand"><i class="fas fa-bus-alt"></i> 智能巴士管理端</div>
                 <div class="nav-menu">
-                    <button class="nav-btn active" id="btnTabExcel" onclick="switchTab('excel')">
-                        <i class="fas fa-file-excel"></i> Google Excel 班次
-                    </button>
-                    <button class="nav-btn" id="btnTabBatch" onclick="switchTab('batch')">
-                        <i class="fas fa-plus-circle"></i> 批量發佈班次
-                    </button>
-                    <button class="nav-btn" id="btnTabScan" onclick="switchTab('scan')">
-                        <i class="fas fa-qrcode"></i> 驗證上車掃碼
-                    </button>
+                    <button class="nav-btn active" id="btnTabTable" onclick="switchTab('table')"><i class="fas fa-table"></i> 實時路程與售票表</button>
+                    <button class="nav-btn" id="btnTabBatch" onclick="switchTab('batch')"><i class="fas fa-plus-circle"></i> 批量發佈班次</button>
+                    <button class="nav-btn" id="btnTabScan" onclick="switchTab('scan')"><i class="fas fa-qrcode"></i> 驗證上車掃碼</button>
                 </div>
             </div>
             <div>
-                <button class="nav-btn" onclick="handleLogout()" style="color: #ef4444;">
-                    <i class="fas fa-sign-out-alt"></i> 登出系統
-                </button>
+                <button class="nav-btn" onclick="handleLogout()" style="color: #ef4444;"><i class="fas fa-sign-out-alt"></i> 登出</button>
             </div>
         </div>
 
-        <!-- 主要內容區 -->
         <div class="main-content">
             <div class="top-bar">
-                <h2 id="pageTitle" style="margin:0;">Google Excel 路線實時監控</h2>
+                <h2 id="pageTitle" style="margin:0;">實時路程與售票表</h2>
                 <span class="user-badge" id="currentUserBadge">身份: 管理員</span>
             </div>
 
-            <!-- 分頁 1: Google Excel 實時檢視 -->
-            <div id="tabExcelView" class="tab-content">
+            <!-- 分頁 1: 實時路程表 -->
+            <div id="tabTableView" class="tab-content">
                 <div class="card">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <h3><i class="fas fa-table" style="color:#10b981;"></i> 雲端試算表 (Google Sheets)</h3>
-                        <a id="externalExcelLink" href="#" target="_blank" style="color: var(--primary); font-size: 14px; text-decoration: none; font-weight: 600;">
-                            <i class="fas fa-external-link-alt"></i> 在 Google Excel 中打開編輯
-                        </a>
-                    </div>
-                    <div class="excel-frame-container">
-                        <!-- Google Sheet 嵌入 -->
-                        <iframe id="excelIframe" src="about:blank"></iframe>
+                    <h3><i class="fas fa-list-alt" style="color:var(--primary);"></i> 班次與售票狀態 (實時同步)</h3>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>出發地</th>
+                                    <th>目的地</th>
+                                    <th>日期</th>
+                                    <th>時間</th>
+                                    <th>單程價格</th>
+                                    <th style="text-align: center;">已售出車票 (人數)</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="schedulesTableBody">
+                                <tr><td colspan="7" style="text-align:center;">載入中...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -174,7 +131,7 @@
             <!-- 分頁 2: 批量產生班次 -->
             <div id="tabBatchView" class="tab-content" style="display: none;">
                 <div class="card" style="max-width: 600px;">
-                    <h3><i class="fas fa-calendar-plus" style="color:var(--primary);"></i> 快速發佈班次</h3>
+                    <h3><i class="fas fa-calendar-plus" style="color:var(--primary);"></i> 發佈新班次</h3>
                     <div class="form-group">
                         <label>出發地 及 目的地</label>
                         <div style="display:flex; gap:10px;">
@@ -197,7 +154,7 @@
                         <label>單程價格 (HK$)</label>
                         <input type="number" id="price" placeholder="例: 20">
                     </div>
-                    <button class="btn-primary" onclick="window.batchAddSchedules()">大量發佈至系統</button>
+                    <button class="btn-primary" onclick="window.batchAddSchedules()">發佈至路程表</button>
                     <div id="scheduleMsg" style="margin-top: 15px; text-align: center;"></div>
                 </div>
             </div>
@@ -206,17 +163,17 @@
             <div id="tabScanView" class="tab-content" style="display: none;">
                 <div class="grid-2">
                     <div class="card">
-                        <h3><i class="fas fa-camera" style="color:var(--primary);"></i> 鏡頭掃描車票</h3>
+                        <h3><i class="fas fa-camera"></i> 鏡頭掃描車票</h3>
                         <div id="reader"></div>
                     </div>
                     <div class="card">
-                        <h3><i class="fas fa-keyboard" style="color:var(--primary);"></i> 手動核銷車票</h3>
+                        <h3><i class="fas fa-keyboard"></i> 手動核銷車票</h3>
                         <div class="form-group" style="margin-top: 20px;">
                             <label>輸入車票號碼</label>
                             <input type="text" id="manualTicketId" placeholder="例如: TKT-XXXXXX">
                         </div>
                         <button class="btn-primary" onclick="window.verifyTicket(document.getElementById('manualTicketId').value.trim())" style="background:#0f766e;">手動核銷</button>
-                        <div id="scanResult" class="result-box" style="display:none;"></div>
+                        <div id="scanResult" class="result-box"></div>
                     </div>
                 </div>
             </div>
@@ -225,7 +182,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, push, set, get, child, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, push, set, get, child, update, onValue, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyCq_8FSy5JU9-ETd1F3whQHwXC_fY1uqdo",
@@ -239,66 +196,46 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // 🔗 在這裡替換你的 Google Sheet 連結
-        // 提示: 請使用 Google Sheet 的「發佈到網路」或共用連結
-        const GOOGLE_SHEET_EDIT_URL = "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing";
-        const GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/htmlembed";
-
         function showToast(msg) {
             const t = document.getElementById('toastBox');
             t.textContent = msg; t.classList.add('show');
             setTimeout(() => t.classList.remove('show'), 3000);
         }
 
-        // ================= 帳號分權登入 =================
         window.handleBackendLogin = function() {
             const u = document.getElementById('loginUser').value.trim();
             const p = document.getElementById('loginPass').value.trim();
-
             if (u === "Admin" && p === "Admin") {
-                sessionStorage.setItem('role', 'admin');
-                initDashboard('admin');
+                sessionStorage.setItem('role', 'admin'); initDashboard('admin');
             } else if (u === "P001" && p === "P001") {
-                sessionStorage.setItem('role', 'staff');
-                initDashboard('staff');
-            } else {
-                showToast("❌ 帳號或密碼錯誤！");
-            }
+                sessionStorage.setItem('role', 'staff'); initDashboard('staff');
+            } else { showToast("❌ 帳號或密碼錯誤！"); }
         };
 
-        window.handleLogout = function() {
-            sessionStorage.clear();
-            location.reload();
-        };
+        window.handleLogout = function() { sessionStorage.clear(); location.reload(); };
 
         function initDashboard(role) {
             document.getElementById('authOverlay').style.display = 'none';
             document.getElementById('mainDashboard').style.display = 'flex';
-
-            // 設定 Google Sheet 連結
-            document.getElementById('externalExcelLink').href = GOOGLE_SHEET_EDIT_URL;
-            document.getElementById('excelIframe').src = GOOGLE_SHEET_EMBED_URL;
-
             if (role === 'staff') {
-                // 員工權限 (P001): 隱藏 Excel 與發佈頁面，僅保留掃描功能
-                document.getElementById('btnTabExcel').style.display = 'none';
+                document.getElementById('btnTabTable').style.display = 'none';
                 document.getElementById('btnTabBatch').style.display = 'none';
-                document.getElementById('currentUserBadge').textContent = "身份: 車站員工 (P001)";
+                document.getElementById('currentUserBadge').textContent = "身份: 員工 (P001)";
                 switchTab('scan');
             } else {
-                document.getElementById('currentUserBadge').textContent = "身份: 最高管理員 (Admin)";
-                switchTab('excel');
+                document.getElementById('currentUserBadge').textContent = "身份: 管理員 (Admin)";
+                switchTab('table');
+                startRealTimeListeners(); // 啟動實時資料表
             }
         }
 
         window.switchTab = function(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
             document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
-
-            if (tab === 'excel') {
-                document.getElementById('tabExcelView').style.display = 'block';
-                document.getElementById('btnTabExcel').classList.add('active');
-                document.getElementById('pageTitle').textContent = "Google Excel 路線實時監控";
+            if (tab === 'table') {
+                document.getElementById('tabTableView').style.display = 'block';
+                document.getElementById('btnTabTable').classList.add('active');
+                document.getElementById('pageTitle').textContent = "實時路程與售票表";
             } else if (tab === 'batch') {
                 document.getElementById('tabBatchView').style.display = 'block';
                 document.getElementById('btnTabBatch').classList.add('active');
@@ -311,33 +248,90 @@
             }
         };
 
-        // ================= 批量新增班次 =================
+        // ================= 實時路程表引擎 =================
+        let liveSchedules = {};
+        let liveTickets = {};
+
+        function startRealTimeListeners() {
+            // 監聽班次表
+            onValue(ref(db, 'schedules'), (snapshot) => {
+                liveSchedules = snapshot.val() || {};
+                renderLiveTable();
+            });
+            // 監聽售出的車票 (用來計算人數)
+            onValue(ref(db, 'tickets'), (snapshot) => {
+                liveTickets = snapshot.val() || {};
+                renderLiveTable();
+            });
+        }
+
+        function renderLiveTable() {
+            const tbody = document.getElementById('schedulesTableBody');
+            tbody.innerHTML = '';
+            const schedulesArray = Object.values(liveSchedules);
+            
+            if (schedulesArray.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">目前無任何班次資料</td></tr>';
+                return;
+            }
+
+            // 依照日期與時間排序
+            schedulesArray.sort((a, b) => {
+                const dateA = new Date(`${a.date}T${a.time}`);
+                const dateB = new Date(`${b.date}T${b.time}`);
+                return dateA - dateB;
+            });
+
+            const ticketsArray = Object.values(liveTickets);
+
+            schedulesArray.forEach(sch => {
+                // 計算這班車賣了多少票 (對比出發地、目的地、日期、時間)
+                const buyersCount = ticketsArray.filter(t => 
+                    t.origin === sch.origin && 
+                    t.destination === sch.destination && 
+                    t.date === sch.date && 
+                    t.time === sch.time
+                ).length;
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${sch.origin}</strong></td>
+                    <td><strong>${sch.destination}</strong></td>
+                    <td>${sch.date}</td>
+                    <td>${sch.time}</td>
+                    <td>HK$ ${sch.price}</td>
+                    <td class="col-buyers">${buyersCount} 人</td>
+                    <td><button class="btn-danger" onclick="window.cancelSchedule('${sch.id}')"><i class="fas fa-trash-alt"></i> 取消</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // 取消(刪除)班次
+        window.cancelSchedule = function(id) {
+            if(confirm("確定要取消這個班次嗎？客戶端將會實時下架此選項。")) {
+                remove(ref(db, `schedules/${id}`)).then(() => {
+                    showToast("✅ 已成功取消該班次");
+                });
+            }
+        };
+
+        // ================= 批量發佈 =================
         window.batchAddSchedules = async function() {
             const origin = document.getElementById('origin').value.trim();
             const dest = document.getElementById('destination').value.trim();
-            const startDateStr = document.getElementById('startDate').value;
-            const endDateStr = document.getElementById('endDate').value;
+            const start = document.getElementById('startDate').value;
+            const end = document.getElementById('endDate').value;
             const timeStr = document.getElementById('times').value;
             const price = document.getElementById('price').value;
-            const msg = document.getElementById('scheduleMsg');
+            if(!origin || !dest || !start || !end || !timeStr || !price) { showToast("請填寫所有欄位"); return; }
 
-            if(!origin || !dest || !startDateStr || !endDateStr || !timeStr || !price) {
-                showToast("請填寫所有班次欄位"); return;
-            }
-
-            const times = timeStr.split(',').map(t => t.trim()).filter(t => t !== "");
-            let currentD = new Date(startDateStr);
-            const endD = new Date(endDateStr);
+            const times = timeStr.split(',').map(t => t.trim()).filter(t => t);
+            let currentD = new Date(start); const endD = new Date(end);
             let count = 0;
 
-            msg.innerHTML = "<span style='color:var(--primary);'>正在發佈至資料庫...</span>";
-
             while(currentD <= endD) {
-                const year = currentD.getFullYear();
-                const month = String(currentD.getMonth() + 1).padStart(2, '0');
-                const day = String(currentD.getDate()).padStart(2, '0');
-                const dateString = `${year}-${month}-${day}`;
-                
+                const dateString = currentD.toISOString().split('T')[0];
                 for(let time of times) {
                     const newRef = push(ref(db, 'schedules'));
                     await set(newRef, { id: newRef.key, origin, destination: dest, date: dateString, time, price, createdAt: Date.now() });
@@ -345,53 +339,34 @@
                 }
                 currentD.setDate(currentD.getDate() + 1);
             }
-            msg.innerHTML = `<span style='color:var(--success); font-weight:bold;'>✅ 成功發佈 ${count} 個班次！</span>`;
-            showToast(`成功發佈 ${count} 個班次`);
+            showToast(`✅ 成功發佈 ${count} 個班次！`);
+            document.getElementById('scheduleMsg').innerHTML = `<span style='color:var(--success);'>✅ 成功發佈 ${count} 個班次，已同步至路程表。</span>`;
         };
 
-        // ================= 車票掃描與核銷邏輯 =================
+        // ================= 核銷 =================
         window.verifyTicket = function(ticketId) {
-            const resultBox = document.getElementById('scanResult');
-            resultBox.style.display = 'block';
-            if(!ticketId) { resultBox.className = 'result-box error'; resultBox.innerHTML = "請輸入車票號碼"; return; }
-
-            resultBox.innerHTML = "驗證中..."; 
-
-            get(child(ref(db), `tickets/${ticketId}`)).then((snapshot) => {
-                if (snapshot.exists()) {
-                    const ticketData = snapshot.val();
-                    if (ticketData.scansLeft > 0) {
-                        const newScansLeft = ticketData.scansLeft - 1;
-                        update(ref(db, `tickets/${ticketId}`), { scansLeft: newScansLeft, lastUsedAt: Date.now() }).then(() => {
-                            resultBox.className = 'result-box success';
-                            let tripType = ticketData.type === 'round' ? '來回票' : '單程票';
-                            let remainMsg = newScansLeft > 0 ? `(可再掃描 ${newScansLeft} 次以作回程)` : `(車票已用盡)`;
-                            resultBox.innerHTML = `✅ 驗證成功！<br>車票：${tripType}<br>剩餘次數：${newScansLeft} 次<br><small>${remainMsg}</small>`;
+            const res = document.getElementById('scanResult');
+            res.style.display = 'block';
+            if(!ticketId) { res.className = 'result-box error'; res.innerHTML = "請輸入車票"; return; }
+            res.innerHTML = "驗證中..."; 
+            get(child(ref(db), `tickets/${ticketId}`)).then((snap) => {
+                if (snap.exists()) {
+                    const t = snap.val();
+                    if (t.scansLeft > 0) {
+                        update(ref(db, `tickets/${ticketId}`), { scansLeft: t.scansLeft - 1, lastUsedAt: Date.now() }).then(() => {
+                            res.className = 'result-box success';
+                            res.innerHTML = `✅ 驗證成功！剩餘：${t.scansLeft - 1} 次<br>行程: ${t.origin}➔${t.destination}`;
                         });
-                    } else {
-                        resultBox.className = 'result-box error';
-                        resultBox.innerHTML = `❌ 次數已用盡：此車票無效！<br>(${ticketId})`;
-                    }
-                } else {
-                    resultBox.className = 'result-box error'; 
-                    resultBox.innerHTML = `❌ 查無此票：${ticketId}`;
-                }
+                    } else { res.className = 'result-box error'; res.innerHTML = `❌ 次數已用盡`; }
+                } else { res.className = 'result-box error'; res.innerHTML = `❌ 查無此票`; }
             });
         };
 
-        let scannerInitialized = false;
-        let lastScanTime = 0;
-
+        let scannerInit = false;
         function initScannerOnce() {
-            if(scannerInitialized) return;
-            scannerInitialized = true;
+            if(scannerInit) return; scannerInit = true;
             let scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
-            scanner.render((decodedText) => {
-                const now = Date.now();
-                if (now - lastScanTime < 3000) return; // 3秒內冷卻防重複掃描
-                lastScanTime = now;
-                window.verifyTicket(decodedText.trim());
-            });
+            scanner.render((text) => { window.verifyTicket(text.trim()); });
         }
     </script>
 </body>
