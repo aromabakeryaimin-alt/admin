@@ -3,54 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>班次與掃碼上車系統 (管理員)</title>
-    <!-- 引入 QR Code 掃描庫 -->
+    <title>車務管理及掃碼系統</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
-
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; padding: 20px; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        h1, h2 { color: #333; }
-        .section { margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px dashed #ccc; }
-        input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
-        button { background-color: #007BFF; color: white; border: none; cursor: pointer; border-radius: 5px; font-size: 16px; }
-        button:hover { background-color: #0056b3; }
-        #reader { width: 100%; max-width: 400px; margin: 10px auto; }
-        .success { color: green; font-weight: bold; font-size: 1.2em; }
-        .error { color: red; font-weight: bold; font-size: 1.2em; }
+        :root { --primary: #2563eb; --bg: #f1f5f9; --card: #ffffff; --text: #1e293b; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .container { grid-template-columns: 1fr; } }
+        .card { background: var(--card); padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: var(--primary); border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.9em; }
+        input { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; }
+        .hint { font-size: 0.8em; color: #64748b; margin-top: 4px; }
+        button { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #1d4ed8; }
+        #reader { width: 100%; margin: 15px 0; border-radius: 8px; overflow: hidden; }
+        .result-box { margin-top: 15px; padding: 15px; border-radius: 8px; font-weight: bold; text-align: center; }
+        .success { background: #dcfce7; color: #166534; }
+        .error { background: #fee2e2; color: #991b1b; }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- 區塊 1：新增班次 -->
-        <div class="section">
-            <h2>新增班次 (管理者)</h2>
-            <input type="text" id="origin" placeholder="出發地 (例: 旺角)">
-            <input type="text" id="destination" placeholder="目的地 (例: 尖沙咀)">
-            <input type="date" id="date">
-            <input type="time" id="time">
-            <input type="number" id="price" placeholder="成人價格 ($)">
-            <button onclick="window.addSchedule()">發佈班次到 Firebase</button>
-            <div id="scheduleMsg"></div>
+        <!-- 批量新增班次區 -->
+        <div class="card">
+            <h2>🚌 批量發佈班次</h2>
+            <div class="form-group">
+                <label>出發地 及 目的地</label>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="origin" placeholder="例: 旺角">
+                    <input type="text" id="destination" placeholder="例: 尖沙咀">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>日期範圍 (可設定未來一個月)</label>
+                <div style="display:flex; gap:10px;">
+                    <input type="date" id="startDate">
+                    <input type="date" id="endDate">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>發車時段 (用逗號分隔)</label>
+                <input type="text" id="times" placeholder="例: 08:00, 12:30, 18:00">
+                <div class="hint">系統會自動為上述每一天生成這些時段的班次</div>
+            </div>
+            <div class="form-group">
+                <label>單程價格 ($)</label>
+                <input type="number" id="price" placeholder="例: 20">
+            </div>
+            <button onclick="window.batchAddSchedules()">大量產生班次</button>
+            <div id="scheduleMsg" style="margin-top: 15px; text-align: center; font-weight: bold;"></div>
         </div>
 
-        <!-- 區塊 2：二維碼上車驗證 -->
-        <div class="section">
-            <h2>二維碼驗證上車系統</h2>
-            <p>請掃描乘客的 QR Code 或手動輸入票號：</p>
+        <!-- 掃描系統區 -->
+        <div class="card">
+            <h2>📷 驗證上車系統</h2>
+            <p style="font-size: 0.9em; color: #64748b;">支援單程票(1次)及來回票(2次)掃描</p>
             <div id="reader"></div>
-            <input type="text" id="manualTicketId" placeholder="輸入車票編號 (如 TKT-123456)">
-            <button onclick="window.verifyTicket(document.getElementById('manualTicketId').value.trim())">手動核銷</button>
-            <div id="scanResult"></div>
+            <div class="form-group" style="margin-top: 15px;">
+                <label>手動輸入車票號碼</label>
+                <input type="text" id="manualTicketId" placeholder="TKT-XXXXXX">
+            </div>
+            <button onclick="window.verifyTicket(document.getElementById('manualTicketId').value.trim())" style="background:#0f766e;">手動核銷</button>
+            <div id="scanResult" class="result-box" style="display:none;"></div>
         </div>
     </div>
 
-    <!-- 將 type 設為 module 以支援 import 語法 -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, push, set, get, child, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-        // 你的 Firebase 設定
         const firebaseConfig = {
             apiKey: "AIzaSyCq_8FSy5JU9-ETd1F3whQHwXC_fY1uqdo",
             authDomain: "admin-bus2026.firebaseapp.com",
@@ -58,78 +81,75 @@
             projectId: "admin-bus2026",
             storageBucket: "admin-bus2026.firebasestorage.app",
             messagingSenderId: "465878874061",
-            appId: "1:465878874061:web:f967bd130caf9546abb684",
-            measurementId: "G-S9FFQH5DPK"
+            appId: "1:465878874061:web:f967bd130caf9546abb684"
         };
-
-        // 初始化 Firebase
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // 新增班次到 Firebase Realtime Database
-        window.addSchedule = function() {
+        // 批量新增班次
+        window.batchAddSchedules = async function() {
             const origin = document.getElementById('origin').value;
-            const destination = document.getElementById('destination').value;
-            const date = document.getElementById('date').value;
-            const time = document.getElementById('time').value;
+            const dest = document.getElementById('destination').value;
+            const startDateStr = document.getElementById('startDate').value;
+            const endDateStr = document.getElementById('endDate').value;
+            const timeStr = document.getElementById('times').value;
             const price = document.getElementById('price').value;
+            const msg = document.getElementById('scheduleMsg');
 
-            if(!origin || !destination || !date || !time || !price) {
-                alert("請填寫所有班次資訊！");
-                return;
+            if(!origin || !dest || !startDateStr || !endDateStr || !timeStr || !price) {
+                msg.innerHTML = "<span style='color:red;'>請填寫所有欄位！</span>"; return;
             }
 
-            const schedulesRef = ref(db, 'schedules');
-            const newScheduleRef = push(schedulesRef);
-            
-            set(newScheduleRef, {
-                id: newScheduleRef.key,
-                origin: origin,
-                destination: destination,
-                date: date,
-                time: time,
-                price: price,
-                createdAt: Date.now()
-            }).then(() => {
-                document.getElementById('scheduleMsg').innerHTML = `<span class="success">✅ 班次已成功同步至 Firebase！</span>`;
-                document.querySelectorAll('input').forEach(input => input.value = '');
-            }).catch(error => {
-                document.getElementById('scheduleMsg').innerHTML = `<span class="error">❌ 發佈失敗: ${error.message}</span>`;
-            });
-        }
+            const times = timeStr.split(',').map(t => t.trim()).filter(t => t !== "");
+            let currentD = new Date(startDateStr);
+            const endD = new Date(endDateStr);
+            let count = 0;
 
-        // 驗證車票邏輯
+            msg.innerHTML = "<span style='color:#2563eb;'>正在生成班次中...</span>";
+
+            while(currentD <= endD) {
+                const dateString = currentD.toISOString().split('T')[0];
+                for(let time of times) {
+                    const newRef = push(ref(db, 'schedules'));
+                    await set(newRef, { id: newRef.key, origin, destination: dest, date: dateString, time, price, createdAt: Date.now() });
+                    count++;
+                }
+                currentD.setDate(currentD.getDate() + 1); // 加一天
+            }
+            msg.innerHTML = `<span style='color:green;'>✅ 成功發佈 ${count} 個班次！</span>`;
+        };
+
+        // 驗證車票
         window.verifyTicket = function(ticketId) {
-            const resultDiv = document.getElementById('scanResult');
-            if(!ticketId) return;
+            const resultBox = document.getElementById('scanResult');
+            resultBox.style.display = 'block';
+            if(!ticketId) { resultBox.className = 'result-box error'; resultBox.innerHTML = "請輸入票號"; return; }
 
-            const dbRef = ref(db);
-            get(child(dbRef, `tickets/${ticketId}`)).then((snapshot) => {
+            get(child(ref(db), `tickets/${ticketId}`)).then((snapshot) => {
                 if (snapshot.exists()) {
                     const ticketData = snapshot.val();
-                    if (ticketData.used) {
-                        resultDiv.innerHTML = `<p class="error">❌ 警告：此車票已於之前使用過！<br>票號：${ticketId}</p>`;
-                    } else {
-                        // 更新為已使用狀態
-                        const ticketRef = ref(db, `tickets/${ticketId}`);
-                        update(ticketRef, { used: true, usedAt: Date.now() }).then(() => {
-                            resultDiv.innerHTML = `<p class="success">✅ 驗證成功！歡迎上車。<br>路線：${ticketData.routeInfo}</p>`;
+                    if (ticketData.scansLeft > 0) {
+                        // 扣減次數
+                        const newScansLeft = ticketData.scansLeft - 1;
+                        update(ref(db, `tickets/${ticketId}`), { scansLeft: newScansLeft, lastUsedAt: Date.now() }).then(() => {
+                            resultBox.className = 'result-box success';
+                            let tripType = ticketData.type === 'round' ? '來回票' : '單程票';
+                            let remainMsg = newScansLeft > 0 ? `(此票還可再掃描 ${newScansLeft} 次以作回程)` : `(車票已用盡)`;
+                            resultBox.innerHTML = `✅ 掃描成功！<br>車票類型：${tripType}<br>剩餘次數：${newScansLeft} 次 <br><span style='font-size:0.8em'>${remainMsg}</span>`;
                         });
+                    } else {
+                        resultBox.className = 'result-box error';
+                        resultBox.innerHTML = `❌ 無效操作：此車票使用次數已盡！<br>(${ticketId})`;
                     }
                 } else {
-                    resultDiv.innerHTML = `<p class="error">❌ 無效車票：資料庫中查無此票號 (${ticketId})</p>`;
+                    resultBox.className = 'result-box error'; resultBox.innerHTML = `❌ 查無此票：${ticketId}`;
                 }
-            }).catch((error) => {
-                resultDiv.innerHTML = `<p class="error">❌ 查詢失敗: ${error.message}</p>`;
             });
-        }
+        };
 
-        // 初始化相機掃描器
-        function onScanSuccess(decodedText) {
-            window.verifyTicket(decodedText.trim());
-        }
-        let html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
-        html5QrcodeScanner.render(onScanSuccess);
+        function onScanSuccess(decodedText) { window.verifyTicket(decodedText.trim()); }
+        let scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+        scanner.render(onScanSuccess);
     </script>
 </body>
 </html>
