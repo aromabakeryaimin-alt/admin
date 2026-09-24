@@ -74,7 +74,6 @@
         .result-box.success { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
         .result-box.error { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 
-        /* 手機流動端適配樣式 (主要針對員工端驗票) */
         @media (max-width: 768px) {
             body { flex-direction: column; }
             .app-container { flex-direction: column; min-height: 100vh; }
@@ -212,7 +211,7 @@
                 </div>
             </div>
 
-            <!-- 分頁 4: 驗票掃描區 (已優化手機介面) -->
+            <!-- 分頁 4: 驗票掃描區 -->
             <div id="tabScanView" class="tab-content" style="display: none;">
                 <div class="grid-2">
                     <div class="card">
@@ -249,6 +248,15 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
+        // SHA-256 加密工具函數
+        async function hashPassword(str) {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(str);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
         document.getElementById('loginPass').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') window.handleBackendLogin();
         });
@@ -259,37 +267,56 @@
             setTimeout(() => t.classList.remove('show'), 3000);
         }
 
-        window.handleBackendLogin = function() {
+        // 優化管理員/員工登入：結合 Firebase 數據庫驗證
+        window.handleBackendLogin = async function() {
             const u = document.getElementById('loginUser').value.trim();
             const p = document.getElementById('loginPass').value.trim();
-            if (u === "Admin" && p === "Admin") {
-                sessionStorage.setItem('role', 'admin'); initDashboard('admin');
-            } else if (u === "P001" && p === "P001") {
-                sessionStorage.setItem('role', 'staff'); initDashboard('staff');
-            } else { showToast("❌ 帳號或密碼錯誤！"); }
+            if(!u || !p) { showToast("⚠️ 請輸入帳號與密碼"); return; }
+
+            const hashed = await hashPassword(p);
+            try {
+                const snap = await get(child(ref(db), `staffAccounts/${u}`));
+                if (snap.exists() && snap.val().passwordHash === hashed) {
+                    const role = snap.val().role;
+                    sessionStorage.setItem('role', role);
+                    initDashboard(role, u);
+                } else if (!snap.exists() && ((u === "Admin" && p === "Admin") || (u === "P001" && p === "P001"))) {
+                    // 初始化建立預設帳號節點（安全性優化相容性）
+                    const defaultRole = u === "Admin" ? "admin" : "staff";
+                    await set(ref(db, `staffAccounts/${u}`), { role: defaultRole, passwordHash: hashed });
+                    sessionStorage.setItem('role', defaultRole);
+                    initDashboard(defaultRole, u);
+                } else {
+                    showToast("❌ 帳號或密碼錯誤！");
+                }
+            } catch(e) {
+                showToast("登入驗證失敗，請檢查網路連線");
+            }
         };
 
         window.handleLogout = function() { sessionStorage.clear(); location.reload(); };
 
-        function initDashboard(role) {
+        function initDashboard(role, username) {
             document.getElementById('authOverlay').style.display = 'none';
             document.getElementById('mainDashboard').style.display = 'flex';
             if (role === 'staff') {
                 document.getElementById('btnTabTable').style.display = 'none';
                 document.getElementById('btnTabSearch').style.display = 'none';
                 document.getElementById('btnTabBatch').style.display = 'none';
-                document.getElementById('currentUserBadge').textContent = "身份: 員工 (P001)";
+                document.getElementById('currentUserBadge').textContent = `身份: 員工 (${username || 'P001'})`;
                 switchTab('scan');
             } else {
-                document.getElementById('currentUserBadge').textContent = "身份: 管理員 (Admin)";
+                document.getElementById('currentUserBadge').textContent = `身份: 管理員 (${username || 'Admin'})`;
                 switchTab('table');
                 startRealTimeListeners(); 
             }
         }
 
+        let html5QrScanner = null;
         window.switchTab = function(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
             document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+            
             if (tab === 'table') {
                 document.getElementById('tabTableView').style.display = 'block';
                 document.getElementById('btnTabTable').classList.add('active');
@@ -356,12 +383,7 @@
                 return;
             }
 
-            schedulesArray.sort((a, b) => {
-                const dateA = new Date(`${a.date}T${a.time}`);
-                const dateB = new Date(`${b.date}T${b.time}`);
-                return dateA - dateB;
-            });
-
+            schedulesArray.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
             const ticketsArray = Object.values(liveTickets);
 
             schedulesArray.forEach(sch => {
@@ -387,8 +409,7 @@
             
             const allCheckboxes = document.querySelectorAll('.delete-cb');
             if(allCheckboxes.length > 0) {
-                const allChecked = Array.from(allCheckboxes).every(cb => cb.checked);
-                document.getElementById('selectAllCb').checked = allChecked;
+                document.getElementById('selectAllCb').checked = Array.from(allCheckboxes).every(cb => cb.checked);
             }
         }
 
@@ -403,7 +424,6 @@
             }
 
             const schedulesArray = Object.values(liveSchedules).filter(sch => sch.date === searchDate);
-            
             if (schedulesArray.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">該日期無任何班次</td></tr>';
                 return;
@@ -429,7 +449,7 @@
                 `;
                 tbody.appendChild(tr);
             });
-        }
+        };
 
         window.batchDeleteSchedules = async function() {
             if (window.selectedScheduleIds.size === 0) {
@@ -465,10 +485,13 @@
             const end = document.getElementById('endDate').value;
             const timeStr = document.getElementById('times').value;
             const price = document.getElementById('price').value;
-            if(!origin || !dest || !start || !end || !timeStr || !price) { showToast("請填寫所有欄位"); return; }
+
+            if(!origin || !dest || !start || !end || !timeStr || !price) { showToast("⚠️ 請完整填寫所有欄位"); return; }
+            if(new Date(start) > new Date(end)) { showToast("⚠️ 開始日期不能大於結束日期"); return; }
 
             const times = timeStr.split(',').map(t => t.trim()).filter(t => t);
-            let currentD = new Date(start); const endD = new Date(end);
+            let currentD = new Date(start); 
+            const endD = new Date(end);
             let count = 0;
 
             while(currentD <= endD) {
@@ -481,7 +504,6 @@
                 currentD.setDate(currentD.getDate() + 1);
             }
             showToast(`✅ 成功發佈 ${count} 個班次！`);
-            
             document.getElementById('times').value = "";
             switchTab('table'); 
         };
@@ -489,27 +511,37 @@
         window.verifyTicket = function(ticketId) {
             const res = document.getElementById('scanResult');
             res.style.display = 'block';
-            if(!ticketId) { res.className = 'result-box error'; res.innerHTML = "請輸入車票"; return; }
+            if(!ticketId) { res.className = 'result-box error'; res.innerHTML = "請輸入車票編號"; return; }
             res.innerHTML = "驗證中..."; 
             get(child(ref(db), `tickets/${ticketId}`)).then((snap) => {
                 if (snap.exists()) {
                     const t = snap.val();
                     if (t.status !== 'boarded') {
                         update(ref(db, `tickets/${ticketId}`), { status: 'boarded', lastUsedAt: Date.now() }).then(() => {
+                            // 同步更新乘客車票副本狀態
+                            if(t.buyerPhone) {
+                                const buyerKey = (t.buyerRegion || '') + t.buyerPhone;
+                                update(ref(db, `users/${buyerKey}/myTickets/${ticketId}`), { status: 'boarded', lastUsedAt: Date.now() });
+                            }
                             res.className = 'result-box success';
-                            res.innerHTML = `✅ 驗證成功！<br>行程: ${t.origin}➔${t.destination}<br>乘車人: ${t.passengerName || t.buyerName}<br>已將車票更新為「已上車」狀態`;
+                            res.innerHTML = `✅ 驗證成功！<br>行程: ${t.origin}➔${t.destination}<br>乘車人: ${t.passengerName || t.buyerName}<br>已更新為「已上車」狀態`;
                         });
                     } else { res.className = 'result-box error'; res.innerHTML = `❌ 此票已被核銷（已上車）`; }
                 } else { res.className = 'result-box error'; res.innerHTML = `❌ 查無此票，請確認是否正確`; }
             });
         };
 
-        let scannerInit = false;
         function initScannerOnce() {
-            if(scannerInit) return; scannerInit = true;
-            let scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 220, height: 220} }, false);
-            scanner.render((text) => { window.verifyTicket(text.trim()); });
+            if(html5QrScanner) return;
+            html5QrScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 220, height: 220} }, false);
+            html5QrScanner.render((text) => { window.verifyTicket(text.trim()); });
         }
+
+        window.onload = function() {
+            if(sessionStorage.getItem('role')) {
+                initDashboard(sessionStorage.getItem('role'));
+            }
+        };
     </script>
 </body>
 </html>
