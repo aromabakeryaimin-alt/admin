@@ -6,7 +6,7 @@
     <title>車務智能管理與驗票系統</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
     <style>
         :root {
             --primary: #4f46e5; --primary-hover: #4338ca; --bg: #f8fafc; --surface: #ffffff;
@@ -55,6 +55,7 @@
         input { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; }
         input:focus { border-color: var(--primary); }
 
+        .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
         .btn-primary { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
         .btn-danger { background: var(--danger); color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; }
         .action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
@@ -97,7 +98,7 @@
             <p>請登入以繼續操作</p>
             <div class="form-group"><input type="text" id="loginUser" placeholder="帳號 (Admin / P001)"></div>
             <div class="form-group"><input type="password" id="loginPass" placeholder="密碼"></div>
-            <button class="btn-primary" style="width:100%;" onclick="handleBackendLogin()">登入</button>
+            <button class="btn-primary" id="loginBtn" style="width:100%;" onclick="handleBackendLogin()">登入</button>
         </div>
     </div>
 
@@ -207,7 +208,7 @@
                         <label>單程價格 (HK$)</label>
                         <input type="number" id="price" placeholder="例: 20">
                     </div>
-                    <button class="btn-primary" style="width:100%;" onclick="window.batchAddSchedules()">發佈至路程表</button>
+                    <button class="btn-primary" id="btnPublish" style="width:100%;" onclick="window.batchAddSchedules()">發佈至路程表</button>
                 </div>
             </div>
 
@@ -234,7 +235,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, push, set, get, child, update, onValue, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, push, set, get, child, update, onValue, remove, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyCq_8FSy5JU9-ETd1F3whQHwXC_fY1uqdo",
@@ -248,75 +249,106 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // SHA-256 加密工具函數
-        async function hashPassword(str) {
-            const encoder = new TextEncoder();
-            const data = encoder.encode(str);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        }
+        // ---------- 工具函數 ----------
+        // HTML 轉義：所有寫入 innerHTML 的動態資料都必須經過此函數，防止 XSS
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-        document.getElementById('loginPass').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') window.handleBackendLogin();
-        });
-
+        let toastTimer = null;
         function showToast(msg) {
             const t = document.getElementById('toastBox');
             t.textContent = msg; t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 3000);
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
         }
 
-        // 優化管理員/員工登入：結合 Firebase 數據庫驗證
+        async function hashPassword(str) {
+            const data = new TextEncoder().encode(str);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        const normTime = (t) => String(t).padStart(5, '0');
+        const schKey = (s) => `${s.origin}|${s.destination}|${s.date}|${normTime(s.time)}`;
+        const schSort = (a, b) => a.date.localeCompare(b.date) || normTime(a.time).localeCompare(normTime(b.time));
+
+        // ---------- 狀態 ----------
+        let currentRole = null;
+        let html5QrScanner = null;
+        let listenersStarted = false;
+        let liveSchedules = {};
+        let liveTickets = {};
+        let lastScan = { text: '', at: 0 };
+        window.selectedScheduleIds = new Set();
+
+        // ---------- 登入 ----------
+        ['loginUser', 'loginPass'].forEach(id => {
+            document.getElementById(id).addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') window.handleBackendLogin();
+            });
+        });
+        document.getElementById('manualTicketId').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') window.verifyTicket(e.target.value.trim());
+        });
+
         window.handleBackendLogin = async function() {
             const u = document.getElementById('loginUser').value.trim();
             const p = document.getElementById('loginPass').value.trim();
-            if(!u || !p) { showToast("⚠️ 請輸入帳號與密碼"); return; }
+            if (!u || !p) { showToast("⚠️ 請輸入帳號與密碼"); return; }
+            // Firebase key 不能含 . # $ [ ] /，先行驗證避免拋錯
+            if (!/^[A-Za-z0-9_-]{1,32}$/.test(u)) { showToast("❌ 帳號格式不正確"); return; }
 
-            const hashed = await hashPassword(p);
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true;
             try {
+                const hashed = await hashPassword(p);
                 const snap = await get(child(ref(db), `staffAccounts/${u}`));
                 if (snap.exists() && snap.val().passwordHash === hashed) {
-                    const role = snap.val().role;
-                    sessionStorage.setItem('role', role);
-                    initDashboard(role, u);
+                    initDashboard(snap.val().role, u);
                 } else if (!snap.exists() && ((u === "Admin" && p === "Admin") || (u === "P001" && p === "P001"))) {
-                    // 初始化建立預設帳號節點（安全性優化相容性）
+                    // 首次使用時建立預設帳號。⚠️ 上線前請務必刪除此段，並在資料庫改用強密碼
                     const defaultRole = u === "Admin" ? "admin" : "staff";
                     await set(ref(db, `staffAccounts/${u}`), { role: defaultRole, passwordHash: hashed });
-                    sessionStorage.setItem('role', defaultRole);
                     initDashboard(defaultRole, u);
                 } else {
                     showToast("❌ 帳號或密碼錯誤！");
                 }
-            } catch(e) {
+            } catch (e) {
                 showToast("登入驗證失敗，請檢查網路連線");
+            } finally {
+                btn.disabled = false;
             }
         };
 
         window.handleLogout = function() { sessionStorage.clear(); location.reload(); };
 
         function initDashboard(role, username) {
+            currentRole = role;
+            sessionStorage.setItem('role', role);
+            sessionStorage.setItem('username', username);
             document.getElementById('authOverlay').style.display = 'none';
             document.getElementById('mainDashboard').style.display = 'flex';
             if (role === 'staff') {
-                document.getElementById('btnTabTable').style.display = 'none';
-                document.getElementById('btnTabSearch').style.display = 'none';
-                document.getElementById('btnTabBatch').style.display = 'none';
-                document.getElementById('currentUserBadge').textContent = `身份: 員工 (${username || 'P001'})`;
-                switchTab('scan');
+                ['btnTabTable', 'btnTabSearch', 'btnTabBatch'].forEach(id => document.getElementById(id).style.display = 'none');
+                document.getElementById('currentUserBadge').textContent = `身份: 員工 (${username})`;
+                window.switchTab('scan');
             } else {
-                document.getElementById('currentUserBadge').textContent = `身份: 管理員 (${username || 'Admin'})`;
-                switchTab('table');
-                startRealTimeListeners(); 
+                document.getElementById('currentUserBadge').textContent = `身份: 管理員 (${username})`;
+                startRealTimeListeners();
+                window.switchTab('table');
             }
         }
 
-        let html5QrScanner = null;
+        // ---------- 分頁切換 ----------
         window.switchTab = function(tab) {
+            // 員工只能使用驗票功能
+            if (currentRole === 'staff' && tab !== 'scan') return;
+
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
             document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
-            
+
+            // 離開掃描頁時關閉鏡頭
+            if (tab !== 'scan') stopScanner();
+
             if (tab === 'table') {
                 document.getElementById('tabTableView').style.display = 'block';
                 document.getElementById('btnTabTable').classList.add('active');
@@ -334,213 +366,277 @@
                 document.getElementById('tabScanView').style.display = 'block';
                 document.getElementById('btnTabScan').classList.add('active');
                 document.getElementById('pageTitle').textContent = "驗票與車票核銷";
-                initScannerOnce();
+                initScanner();
             }
         };
 
-        let liveSchedules = {};
-        let liveTickets = {};
-        window.selectedScheduleIds = new Set();
-
+        // ---------- 即時監聽 ----------
         function startRealTimeListeners() {
-            onValue(ref(db, 'schedules'), (snapshot) => {
-                liveSchedules = snapshot.val() || {};
+            if (listenersStarted) return;
+            listenersStarted = true;
+            const refreshViews = () => {
                 renderLiveTable();
-                if(document.getElementById('tabSearchView').style.display === 'block') {
-                    window.renderSearchTable();
-                }
-            });
-            onValue(ref(db, 'tickets'), (snapshot) => {
-                liveTickets = snapshot.val() || {};
-                renderLiveTable();
-                if(document.getElementById('tabSearchView').style.display === 'block') {
-                    window.renderSearchTable(); 
-                }
-            });
+                if (document.getElementById('tabSearchView').style.display === 'block') window.renderSearchTable();
+            };
+            onValue(ref(db, 'schedules'), (snapshot) => { liveSchedules = snapshot.val() || {}; refreshViews(); });
+            onValue(ref(db, 'tickets'), (snapshot) => { liveTickets = snapshot.val() || {}; refreshViews(); });
         }
 
+        function buyersMap() {
+            const m = new Map();
+            Object.values(liveTickets).forEach(t => {
+                if (!t || !t.date) return;
+                const k = schKey(t);
+                m.set(k, (m.get(k) || 0) + 1);
+            });
+            return m;
+        }
+
+        const validSchedules = () => Object.values(liveSchedules).filter(s => s && s.id && s.date && s.time);
+
         window.handleCheckboxChange = function(cb) {
-            if(cb.checked) window.selectedScheduleIds.add(cb.value);
+            if (cb.checked) window.selectedScheduleIds.add(cb.value);
             else window.selectedScheduleIds.delete(cb.value);
+            syncSelectAll();
         };
 
         window.toggleSelectAll = function(source) {
-            const checkboxes = document.querySelectorAll('.delete-cb');
-            checkboxes.forEach(cb => {
+            document.querySelectorAll('.delete-cb').forEach(cb => {
                 cb.checked = source.checked;
-                if(source.checked) window.selectedScheduleIds.add(cb.value);
+                if (source.checked) window.selectedScheduleIds.add(cb.value);
                 else window.selectedScheduleIds.delete(cb.value);
             });
         };
 
+        function syncSelectAll() {
+            const all = document.querySelectorAll('.delete-cb');
+            document.getElementById('selectAllCb').checked = all.length > 0 && Array.from(all).every(cb => cb.checked);
+        }
+
         function renderLiveTable() {
             const tbody = document.getElementById('schedulesTableBody');
-            tbody.innerHTML = '';
-            const schedulesArray = Object.values(liveSchedules);
-            
-            if (schedulesArray.length === 0) {
+            const arr = validSchedules().sort(schSort);
+
+            // 清除已不存在的勾選項
+            const existing = new Set(arr.map(s => s.id));
+            window.selectedScheduleIds.forEach(id => { if (!existing.has(id)) window.selectedScheduleIds.delete(id); });
+
+            if (arr.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">目前無任何班次資料</td></tr>';
+                document.getElementById('selectAllCb').checked = false;
                 return;
             }
 
-            schedulesArray.sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
-            const ticketsArray = Object.values(liveTickets);
-
-            schedulesArray.forEach(sch => {
-                const buyersCount = ticketsArray.filter(t => 
-                    t.origin === sch.origin && t.destination === sch.destination && 
-                    t.date === sch.date && t.time === sch.time
-                ).length;
-
-                const tr = document.createElement('tr');
-                const isChecked = window.selectedScheduleIds.has(sch.id) ? 'checked' : '';
-                tr.innerHTML = `
-                    <td class="checkbox-cell"><input type="checkbox" class="delete-cb" value="${sch.id}" onchange="window.handleCheckboxChange(this)" ${isChecked}></td>
-                    <td><strong>${sch.origin}</strong></td>
-                    <td><strong>${sch.destination}</strong></td>
-                    <td>${sch.date}</td>
-                    <td>${sch.time}</td>
-                    <td>HK$ ${sch.price}</td>
-                    <td class="col-buyers">${buyersCount} 人</td>
-                    <td><button class="btn-danger" onclick="window.cancelSchedule('${sch.id}')"><i class="fas fa-trash-alt"></i> 取消</button></td>
-                `;
-                tbody.appendChild(tr);
-            });
-            
-            const allCheckboxes = document.querySelectorAll('.delete-cb');
-            if(allCheckboxes.length > 0) {
-                document.getElementById('selectAllCb').checked = Array.from(allCheckboxes).every(cb => cb.checked);
-            }
+            const counts = buyersMap();
+            tbody.innerHTML = arr.map(sch => `
+                <tr>
+                    <td class="checkbox-cell"><input type="checkbox" class="delete-cb" value="${esc(sch.id)}" onchange="window.handleCheckboxChange(this)" ${window.selectedScheduleIds.has(sch.id) ? 'checked' : ''}></td>
+                    <td><strong>${esc(sch.origin)}</strong></td>
+                    <td><strong>${esc(sch.destination)}</strong></td>
+                    <td>${esc(sch.date)}</td>
+                    <td>${esc(sch.time)}</td>
+                    <td>HK$ ${esc(sch.price)}</td>
+                    <td class="col-buyers">${counts.get(schKey(sch)) || 0} 人</td>
+                    <td><button class="btn-danger" onclick="window.cancelSchedule('${esc(sch.id)}')"><i class="fas fa-trash-alt"></i> 取消</button></td>
+                </tr>`).join('');
+            syncSelectAll();
         }
 
         window.renderSearchTable = function() {
             const searchDate = document.getElementById('searchDateInput').value;
             const tbody = document.getElementById('searchTableBody');
-            tbody.innerHTML = '';
+            const empty = (msg) => tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">${msg}</td></tr>`;
 
-            if (!searchDate) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">請先選擇上方日期</td></tr>';
-                return;
-            }
+            if (!searchDate) { empty('請先選擇上方日期'); return; }
+            const arr = validSchedules().filter(s => s.date === searchDate).sort(schSort);
+            if (arr.length === 0) { empty('該日期無任何班次'); return; }
 
-            const schedulesArray = Object.values(liveSchedules).filter(sch => sch.date === searchDate);
-            if (schedulesArray.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">該日期無任何班次</td></tr>';
-                return;
-            }
-
-            schedulesArray.sort((a, b) => a.time.localeCompare(b.time));
-            const ticketsArray = Object.values(liveTickets);
-
-            schedulesArray.forEach(sch => {
-                const buyersCount = ticketsArray.filter(t => 
-                    t.origin === sch.origin && t.destination === sch.destination && 
-                    t.date === sch.date && t.time === sch.time
-                ).length;
-
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><strong>${sch.origin}</strong></td>
-                    <td><strong>${sch.destination}</strong></td>
-                    <td>${sch.time}</td>
-                    <td>HK$ ${sch.price}</td>
-                    <td class="col-buyers">${buyersCount} 人</td>
-                    <td><button class="btn-danger" onclick="window.cancelSchedule('${sch.id}')"><i class="fas fa-trash-alt"></i> 取消</button></td>
-                `;
-                tbody.appendChild(tr);
-            });
+            const counts = buyersMap();
+            tbody.innerHTML = arr.map(sch => `
+                <tr>
+                    <td><strong>${esc(sch.origin)}</strong></td>
+                    <td><strong>${esc(sch.destination)}</strong></td>
+                    <td>${esc(sch.time)}</td>
+                    <td>HK$ ${esc(sch.price)}</td>
+                    <td class="col-buyers">${counts.get(schKey(sch)) || 0} 人</td>
+                    <td><button class="btn-danger" onclick="window.cancelSchedule('${esc(sch.id)}')"><i class="fas fa-trash-alt"></i> 取消</button></td>
+                </tr>`).join('');
         };
+
+        // ---------- 刪除班次 ----------
+        function soldCountFor(ids) {
+            const counts = buyersMap();
+            let n = 0;
+            ids.forEach(id => { const s = liveSchedules[id]; if (s) n += counts.get(schKey(s)) || 0; });
+            return n;
+        }
 
         window.batchDeleteSchedules = async function() {
-            if (window.selectedScheduleIds.size === 0) {
-                showToast("⚠️ 請先在表格左側勾選要刪除的班次！");
-                return;
-            }
-            if (confirm(`確定要一次刪除所選的 ${window.selectedScheduleIds.size} 個班次嗎？\n客戶端將會實時下架這些選項。`)) {
-                let deletePromises = [];
-                window.selectedScheduleIds.forEach(id => {
-                    deletePromises.push(remove(ref(db, `schedules/${id}`)));
-                });
-                
-                await Promise.all(deletePromises);
-                showToast(`✅ 已成功批量刪除 ${window.selectedScheduleIds.size} 個班次`);
+            const ids = Array.from(window.selectedScheduleIds);
+            if (ids.length === 0) { showToast("⚠️ 請先在表格左側勾選要刪除的班次！"); return; }
+            const sold = soldCountFor(ids);
+            const warn = sold > 0 ? `\n⚠️ 其中已有 ${sold} 張已售車票，刪除後乘客的車票仍存在，請留意處理退款。` : '';
+            if (!confirm(`確定要一次刪除所選的 ${ids.length} 個班次嗎？\n客戶端將會實時下架這些選項。${warn}`)) return;
+
+            try {
+                const updates = {};
+                ids.forEach(id => { updates[`schedules/${id}`] = null; });
+                await update(ref(db), updates); // 單次原子寫入
+                showToast(`✅ 已成功批量刪除 ${ids.length} 個班次`);
                 window.selectedScheduleIds.clear();
                 document.getElementById('selectAllCb').checked = false;
+            } catch (e) {
+                showToast("❌ 刪除失敗，請檢查網路或權限");
             }
         };
 
-        window.cancelSchedule = function(id) {
-            if(confirm("確定要取消這個班次嗎？客戶端將會實時下架此選項。")) {
-                remove(ref(db, `schedules/${id}`)).then(() => {
-                    window.selectedScheduleIds.delete(id);
-                    showToast("✅ 已成功取消該班次");
-                });
+        window.cancelSchedule = async function(id) {
+            const sold = soldCountFor([id]);
+            const warn = sold > 0 ? `\n⚠️ 此班次已售出 ${sold} 張車票，請留意處理退款。` : '';
+            if (!confirm(`確定要取消這個班次嗎？客戶端將會實時下架此選項。${warn}`)) return;
+            try {
+                await remove(ref(db, `schedules/${id}`));
+                window.selectedScheduleIds.delete(id);
+                showToast("✅ 已成功取消該班次");
+            } catch (e) {
+                showToast("❌ 取消失敗，請檢查網路或權限");
             }
         };
 
+        // ---------- 批量發佈班次 ----------
         window.batchAddSchedules = async function() {
             const origin = document.getElementById('origin').value.trim();
             const dest = document.getElementById('destination').value.trim();
             const start = document.getElementById('startDate').value;
             const end = document.getElementById('endDate').value;
             const timeStr = document.getElementById('times').value;
-            const price = document.getElementById('price').value;
+            const price = Number(document.getElementById('price').value);
 
-            if(!origin || !dest || !start || !end || !timeStr || !price) { showToast("⚠️ 請完整填寫所有欄位"); return; }
-            if(new Date(start) > new Date(end)) { showToast("⚠️ 開始日期不能大於結束日期"); return; }
+            if (!origin || !dest || !start || !end || !timeStr || !document.getElementById('price').value) { showToast("⚠️ 請完整填寫所有欄位"); return; }
+            if (origin === dest) { showToast("⚠️ 出發地與目的地不能相同"); return; }
+            if (!Number.isFinite(price) || price <= 0) { showToast("⚠️ 價格必須是大於 0 的數字"); return; }
+            if (start > end) { showToast("⚠️ 開始日期不能大於結束日期"); return; }
 
-            const times = timeStr.split(',').map(t => t.trim()).filter(t => t);
-            let currentD = new Date(start); 
-            const endD = new Date(end);
-            let count = 0;
+            // 支援全形逗號；驗證並統一為 HH:MM，乘客端才能正確解析
+            const rawTimes = timeStr.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+            const times = [];
+            for (const t of rawTimes) {
+                if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) { showToast(`⚠️ 時間格式錯誤：「${t}」，請用 HH:MM`); return; }
+                const n = normTime(t);
+                if (!times.includes(n)) times.push(n);
+            }
+            if (times.length === 0) { showToast("⚠️ 請輸入至少一個發車時段"); return; }
 
-            while(currentD <= endD) {
-                const dateString = currentD.toISOString().split('T')[0];
-                for(let time of times) {
-                    const newRef = push(ref(db, 'schedules'));
-                    await set(newRef, { id: newRef.key, origin, destination: dest, date: dateString, time, price, createdAt: Date.now() });
+            // 以 UTC 迭代日期，避免時區造成日期錯位
+            const dates = [];
+            const endD = new Date(end + 'T00:00:00Z');
+            for (let d = new Date(start + 'T00:00:00Z'); d <= endD; d.setUTCDate(d.getUTCDate() + 1)) {
+                dates.push(d.toISOString().slice(0, 10));
+            }
+            const total = dates.length * times.length;
+            if (total > 1000) { showToast("⚠️ 單次最多發佈 1000 個班次，請縮小日期範圍"); return; }
+
+            // 略過已存在的相同班次，避免重複
+            const existing = new Set(validSchedules().map(schKey));
+            const updates = {};
+            let count = 0, skipped = 0;
+            for (const date of dates) {
+                for (const time of times) {
+                    const s = { origin, destination: dest, date, time };
+                    if (existing.has(schKey(s))) { skipped++; continue; }
+                    const id = push(ref(db, 'schedules')).key;
+                    updates[`schedules/${id}`] = { id, origin, destination: dest, date, time, price, createdAt: Date.now() };
                     count++;
                 }
-                currentD.setDate(currentD.getDate() + 1);
             }
-            showToast(`✅ 成功發佈 ${count} 個班次！`);
-            document.getElementById('times').value = "";
-            switchTab('table'); 
+            if (count === 0) { showToast("⚠️ 這些班次已全部存在，沒有新增"); return; }
+
+            const btn = document.getElementById('btnPublish');
+            btn.disabled = true;
+            try {
+                await update(ref(db), updates); // 單次寫入，比逐筆 await 快且不會只成功一半
+                showToast(`✅ 成功發佈 ${count} 個班次！${skipped ? `（略過 ${skipped} 個重複）` : ''}`);
+                document.getElementById('times').value = "";
+                window.switchTab('table');
+            } catch (e) {
+                showToast("❌ 發佈失敗，請檢查網路或權限");
+            } finally {
+                btn.disabled = false;
+            }
         };
 
-        window.verifyTicket = function(ticketId) {
+        // ---------- 驗票 ----------
+        function showResult(cls, html) {
             const res = document.getElementById('scanResult');
             res.style.display = 'block';
-            if(!ticketId) { res.className = 'result-box error'; res.innerHTML = "請輸入車票編號"; return; }
-            res.innerHTML = "驗證中..."; 
-            get(child(ref(db), `tickets/${ticketId}`)).then((snap) => {
-                if (snap.exists()) {
-                    const t = snap.val();
-                    if (t.status !== 'boarded') {
-                        update(ref(db, `tickets/${ticketId}`), { status: 'boarded', lastUsedAt: Date.now() }).then(() => {
-                            // 同步更新乘客車票副本狀態
-                            if(t.buyerPhone) {
-                                const buyerKey = (t.buyerRegion || '') + t.buyerPhone;
-                                update(ref(db, `users/${buyerKey}/myTickets/${ticketId}`), { status: 'boarded', lastUsedAt: Date.now() });
-                            }
-                            res.className = 'result-box success';
-                            res.innerHTML = `✅ 驗證成功！<br>行程: ${t.origin}➔${t.destination}<br>乘車人: ${t.passengerName || t.buyerName}<br>已更新為「已上車」狀態`;
+            res.className = `result-box ${cls}`;
+            res.innerHTML = html;
+        }
+
+        window.verifyTicket = async function(ticketId) {
+            if (!ticketId) { showResult('error', "請輸入車票編號"); return; }
+            // 防止含特殊字元的 QR 內容導致 Firebase 路徑錯誤
+            if (!/^[A-Za-z0-9_-]{1,64}$/.test(ticketId)) { showResult('error', "❌ 車票格式不正確"); return; }
+
+            const res = document.getElementById('scanResult');
+            res.style.display = 'block';
+            res.className = 'result-box';
+            res.textContent = "驗證中...";
+
+            try {
+                const ticketRef = ref(db, `tickets/${ticketId}`);
+                const snap = await get(ticketRef);
+                if (!snap.exists()) { showResult('error', "❌ 查無此票，請確認是否正確"); return; }
+
+                // 用 transaction 核銷，避免兩位員工同時掃同一張票都成功
+                const result = await runTransaction(ticketRef, (cur) => {
+                    if (cur === null) return cur;
+                    if (cur.status === 'boarded') return; // 已核銷 → 中止
+                    return { ...cur, status: 'boarded', lastUsedAt: Date.now() };
+                });
+
+                if (!result.committed) { showResult('error', "❌ 此票已被核銷（已上車）"); return; }
+
+                const t = result.snapshot.val();
+                // 同步乘客端車票副本；舊資料沒有 buyerKey 時由區號+電話推算（乘客端 key 不含 "+"）
+                const buyerKey = t.buyerKey || (((t.buyerRegion || '') + (t.buyerPhone || '')).replace(/\+/g, ''));
+                if (buyerKey) {
+                    try {
+                        await update(ref(db), {
+                            [`users/${buyerKey}/myTickets/${ticketId}/status`]: 'boarded',
+                            [`users/${buyerKey}/myTickets/${ticketId}/lastUsedAt`]: t.lastUsedAt
                         });
-                    } else { res.className = 'result-box error'; res.innerHTML = `❌ 此票已被核銷（已上車）`; }
-                } else { res.className = 'result-box error'; res.innerHTML = `❌ 查無此票，請確認是否正確`; }
-            });
+                    } catch (e) { /* 副本同步失敗不影響核銷結果 */ }
+                }
+                showResult('success', `✅ 驗證成功！<br>行程: ${esc(t.origin)}➔${esc(t.destination)}<br>日期時間: ${esc(t.date)} ${esc(t.time)}<br>乘車人: ${esc(t.passengerName || t.buyerName)}<br>已更新為「已上車」狀態`);
+            } catch (e) {
+                showResult('error', "❌ 驗證失敗，請檢查網路或權限");
+            }
         };
 
-        function initScannerOnce() {
-            if(html5QrScanner) return;
-            html5QrScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 220, height: 220} }, false);
-            html5QrScanner.render((text) => { window.verifyTicket(text.trim()); });
+        function initScanner() {
+            if (html5QrScanner) return;
+            html5QrScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: { width: 220, height: 220 } }, false);
+            html5QrScanner.render((text) => {
+                // 鏡頭會連續讀到同一張碼，3 秒內相同內容忽略
+                const now = Date.now();
+                const t = text.trim();
+                if (t === lastScan.text && now - lastScan.at < 3000) return;
+                lastScan = { text: t, at: now };
+                window.verifyTicket(t);
+            }, () => {});
+        }
+
+        function stopScanner() {
+            if (!html5QrScanner) return;
+            const s = html5QrScanner;
+            html5QrScanner = null;
+            Promise.resolve(s.clear()).catch(() => {});
         }
 
         window.onload = function() {
-            if(sessionStorage.getItem('role')) {
-                initDashboard(sessionStorage.getItem('role'));
-            }
+            const role = sessionStorage.getItem('role');
+            if (role) initDashboard(role, sessionStorage.getItem('username') || (role === 'admin' ? 'Admin' : 'P001'));
         };
     </script>
 </body>
