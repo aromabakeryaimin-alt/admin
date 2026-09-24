@@ -2,7 +2,7 @@
 <html lang="zh-HK">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>車務智能管理與驗票系統</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -24,7 +24,6 @@
         }
         .toast.show { top: 20px; }
 
-        /* 優化登入介面設計 */
         .auth-overlay { position: fixed; inset: 0; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); display: flex; justify-content: center; align-items: center; z-index: 1000; }
         .auth-overlay::before { content: ''; position: absolute; inset: 0; backdrop-filter: blur(10px); background: rgba(15, 23, 42, 0.4); z-index: -1; }
         .auth-card { background: var(--surface); width: 100%; max-width: 420px; padding: 45px 40px; border-radius: 24px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); text-align: center; margin: 20px; }
@@ -49,7 +48,7 @@
         .user-badge { background: #e0e7ff; color: var(--primary); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
 
         .card { background: var(--surface); border-radius: 16px; padding: 25px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
         
         .form-group { margin-bottom: 18px; }
         .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
@@ -70,10 +69,23 @@
         .checkbox-cell { width: 40px; text-align: center; }
         input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary); }
 
-        #reader { border-radius: 12px; overflow: hidden; border: none !important; }
+        #reader { border-radius: 12px; overflow: hidden; border: none !important; width: 100%; }
         .result-box { margin-top: 15px; padding: 15px; border-radius: 10px; font-weight: 600; text-align: center; display: none; }
         .result-box.success { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
         .result-box.error { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+
+        /* 手機流動端適配樣式 (主要針對員工端驗票) */
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            .app-container { flex-direction: column; min-height: 100vh; }
+            .sidebar { width: 100%; padding: 15px 20px; gap: 15px; }
+            .brand { margin-bottom: 15px; }
+            .main-content { padding: 15px; }
+            .top-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .grid-2 { grid-template-columns: 1fr; }
+            .card { padding: 16px; }
+            .auth-card { padding: 30px 20px; margin: 15px; }
+        }
     </style>
 </head>
 <body>
@@ -200,7 +212,7 @@
                 </div>
             </div>
 
-            <!-- 分頁 4: 驗票掃描區 -->
+            <!-- 分頁 4: 驗票掃描區 (已優化手機介面) -->
             <div id="tabScanView" class="tab-content" style="display: none;">
                 <div class="grid-2">
                     <div class="card">
@@ -237,7 +249,6 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // 監聽 Enter 鍵登入
         document.getElementById('loginPass').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') window.handleBackendLogin();
         });
@@ -300,11 +311,8 @@
             }
         };
 
-        // ================= 實時路程表引擎 =================
         let liveSchedules = {};
         let liveTickets = {};
-        
-        // 【修復】引入 Set 來記錄使用者已勾選的方塊，避免資料庫實時更新導致勾選狀態被清空
         window.selectedScheduleIds = new Set();
 
         function startRealTimeListeners() {
@@ -324,13 +332,11 @@
             });
         }
 
-        // 單筆勾選狀態變更
         window.handleCheckboxChange = function(cb) {
             if(cb.checked) window.selectedScheduleIds.add(cb.value);
             else window.selectedScheduleIds.delete(cb.value);
         };
 
-        // 批量選擇功能更新
         window.toggleSelectAll = function(source) {
             const checkboxes = document.querySelectorAll('.delete-cb');
             checkboxes.forEach(cb => {
@@ -340,7 +346,6 @@
             });
         };
 
-        // 渲染總表
         function renderLiveTable() {
             const tbody = document.getElementById('schedulesTableBody');
             tbody.innerHTML = '';
@@ -380,7 +385,6 @@
                 tbody.appendChild(tr);
             });
             
-            // 檢查是否所有項都已被勾選，同步更新「全選」方塊狀態
             const allCheckboxes = document.querySelectorAll('.delete-cb');
             if(allCheckboxes.length > 0) {
                 const allChecked = Array.from(allCheckboxes).every(cb => cb.checked);
@@ -427,7 +431,6 @@
             });
         }
 
-        // 批量刪除班次 (修改以支援 Set)
         window.batchDeleteSchedules = async function() {
             if (window.selectedScheduleIds.size === 0) {
                 showToast("⚠️ 請先在表格左側勾選要刪除的班次！");
@@ -441,12 +444,11 @@
                 
                 await Promise.all(deletePromises);
                 showToast(`✅ 已成功批量刪除 ${window.selectedScheduleIds.size} 個班次`);
-                window.selectedScheduleIds.clear(); // 清空記憶
+                window.selectedScheduleIds.clear();
                 document.getElementById('selectAllCb').checked = false;
             }
         };
 
-        // 單一取消班次
         window.cancelSchedule = function(id) {
             if(confirm("確定要取消這個班次嗎？客戶端將會實時下架此選項。")) {
                 remove(ref(db, `schedules/${id}`)).then(() => {
@@ -456,7 +458,6 @@
             }
         };
 
-        // ================= 批量發佈 =================
         window.batchAddSchedules = async function() {
             const origin = document.getElementById('origin').value.trim();
             const dest = document.getElementById('destination').value.trim();
@@ -485,7 +486,6 @@
             switchTab('table'); 
         };
 
-        // ================= 核銷 =================
         window.verifyTicket = function(ticketId) {
             const res = document.getElementById('scanResult');
             res.style.display = 'block';
@@ -497,7 +497,7 @@
                     if (t.status !== 'boarded') {
                         update(ref(db, `tickets/${ticketId}`), { status: 'boarded', lastUsedAt: Date.now() }).then(() => {
                             res.className = 'result-box success';
-                            res.innerHTML = `✅ 驗證成功！<br>行程: ${t.origin}➔${t.destination}<br>已將車票更新為「已上車」狀態`;
+                            res.innerHTML = `✅ 驗證成功！<br>行程: ${t.origin}➔${t.destination}<br>乘車人: ${t.passengerName || t.buyerName}<br>已將車票更新為「已上車」狀態`;
                         });
                     } else { res.className = 'result-box error'; res.innerHTML = `❌ 此票已被核銷（已上車）`; }
                 } else { res.className = 'result-box error'; res.innerHTML = `❌ 查無此票，請確認是否正確`; }
@@ -507,7 +507,7 @@
         let scannerInit = false;
         function initScannerOnce() {
             if(scannerInit) return; scannerInit = true;
-            let scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+            let scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 220, height: 220} }, false);
             scanner.render((text) => { window.verifyTicket(text.trim()); });
         }
     </script>
