@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>車務智能管理與驗票系統</title>
+    <title>瑞里智能購票系統 - 後台管理</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
@@ -22,7 +22,14 @@
             font-size: 14px; font-weight: 500; box-shadow: 0 10px 25px rgba(0,0,0,0.15);
             z-index: 9999; transition: all 0.3s ease;
         }
-        .toast.show { top: 20px; }
+        .toast.show { top: 20px; animation: toastPop .35s cubic-bezier(.2,1.4,.4,1) both; }
+        @keyframes toastPop { 0% { transform: translate(-50%,-16px) scale(.9); opacity: 0; } 60% { transform: translate(-50%,4px) scale(1.03); opacity: 1; } 100% { transform: translate(-50%,0) scale(1); opacity: 1; } }
+        button { transition: transform .15s ease; }
+        button:active { transform: scale(.96); }
+        @keyframes rowIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+        tbody tr { animation: rowIn .28s ease both; }
+        .nav-btn { transition: background .2s, transform .15s, padding-left .2s; }
+        .nav-btn:hover { padding-left: 22px; }
 
         .auth-overlay { position: fixed; inset: 0; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); display: flex; justify-content: center; align-items: center; z-index: 1000; }
         .auth-overlay::before { content: ''; position: absolute; inset: 0; backdrop-filter: blur(10px); background: rgba(15, 23, 42, 0.4); z-index: -1; }
@@ -47,7 +54,13 @@
         .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
         .user-badge { background: #e0e7ff; color: var(--primary); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
 
-        .card { background: var(--surface); border-radius: 16px; padding: 25px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .card { background: var(--surface); border-radius: 20px; padding: 25px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.05); animation: cardPop .3s ease both; }
+        @keyframes cardPop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        #reader { position: relative; overflow: hidden; border-radius: 14px; }
+        #reader.scanning::after { content: ''; position: absolute; left: 4%; right: 4%; height: 2px; background: linear-gradient(90deg, transparent, var(--primary), transparent); box-shadow: 0 0 8px var(--primary); animation: scanLine 2.4s ease-in-out infinite; }
+        @keyframes scanLine { 0% { top: 6%; } 50% { top: 92%; } 100% { top: 6%; } }
+        @keyframes viewIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .view-anim { animation: viewIn .3s ease both; }
         .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
         
         .form-group { margin-bottom: 18px; }
@@ -56,8 +69,8 @@
         input:focus { border-color: var(--primary); }
 
         .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
-        .btn-primary { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
-        .btn-danger { background: var(--danger); color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; }
+        .btn-primary { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 14px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        .btn-danger { background: var(--danger); color: white; border: none; padding: 6px 12px; border-radius: 12px; font-size: 12px; cursor: pointer; font-weight: 600; }
         .action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 
         .table-responsive { overflow-x: auto; }
@@ -97,7 +110,8 @@
 
     <div id="authOverlay" class="auth-overlay">
         <div class="auth-card">
-            <h2><i class="fas fa-bus-alt" style="color:var(--primary);"></i> 車務管理系統</h2>
+            <h2><i class="fas fa-bus-alt" style="color:var(--primary);"></i> 瑞里智能購票系統</h2>
+            <div style="font-size:12px; color:var(--text-muted); margin:-8px 0 6px;">🌕 中秋節快樂　後台管理</div>
             <p>請登入以繼續操作</p>
             <div class="form-group"><input type="text" id="loginUser" placeholder="帳號 (Admin / P001)"></div>
             <div class="form-group"><input type="password" id="loginPass" placeholder="密碼"></div>
@@ -108,7 +122,7 @@
     <div class="app-container" id="mainDashboard" style="display: none;">
         <div class="sidebar">
             <div>
-                <div class="brand"><i class="fas fa-bus-alt"></i> 智能巴士管理端</div>
+                <div class="brand"><i class="fas fa-bus-alt"></i> 瑞里智能購票系統</div>
                 <div class="nav-menu">
                     <button class="nav-btn active" id="btnTabTable" onclick="switchTab('table')"><i class="fas fa-list"></i> 所有班次 (總表)</button>
                     <button class="nav-btn" id="btnTabSearch" onclick="switchTab('search')"><i class="fas fa-search"></i> 依日期查詢</button>
@@ -400,6 +414,8 @@
                 document.getElementById('pageTitle').textContent = "驗票與車票核銷";
                 initScanner();
             }
+            const activeTab = document.querySelector('.tab-content[style*="block"]');
+            if (activeTab) { activeTab.classList.remove('view-anim'); void activeTab.offsetWidth; activeTab.classList.add('view-anim'); }
         };
 
         // ---------- 即時監聽 ----------
@@ -678,6 +694,7 @@
 
         function initScanner() {
             if (html5QrScanner) return;
+            document.getElementById('reader').classList.add('scanning');
             html5QrScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: { width: 220, height: 220 } }, false);
             html5QrScanner.render((text) => {
                 // 鏡頭會連續讀到同一張碼，3 秒內相同內容忽略
@@ -690,6 +707,7 @@
         }
 
         function stopScanner() {
+            document.getElementById('reader').classList.remove('scanning');
             if (!html5QrScanner) return;
             const s = html5QrScanner;
             html5QrScanner = null;
