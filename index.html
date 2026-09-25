@@ -128,6 +128,7 @@
                     <button class="nav-btn" id="btnTabSearch" onclick="switchTab('search')"><i class="fas fa-search"></i> 依日期查詢</button>
                     <button class="nav-btn" id="btnTabBatch" onclick="switchTab('batch')"><i class="fas fa-plus-circle"></i> 批量發佈班次</button>
                     <button class="nav-btn" id="btnTabScan" onclick="switchTab('scan')"><i class="fas fa-qrcode"></i> 驗證上車掃碼</button>
+                    <button class="nav-btn" id="btnTabTopup" onclick="switchTab('topup')"><i class="fas fa-wallet"></i> 會員銀包增值</button>
                 </div>
             </div>
             <div>
@@ -256,6 +257,43 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 分頁 5: 會員銀包增值 -->
+            <div id="tabTopupView" class="tab-content" style="display: none;">
+                <div class="grid-2">
+                    <div class="card">
+                        <h3><i class="fas fa-camera"></i> 掃描會員增值二維碼</h3>
+                        <div id="readerTopup"></div>
+                        <div class="form-group" style="margin-top: 20px;">
+                            <label>或手動輸入會員電話（無法掃碼時使用）</label>
+                            <div style="display:flex; gap:8px;">
+                                <select id="topupRegion" style="width:110px;">
+                                    <option value="+86">中國 (+86)</option>
+                                    <option value="+852" selected>香港 (+852)</option>
+                                    <option value="+853">澳門 (+853)</option>
+                                </select>
+                                <input type="text" id="topupPhone" placeholder="輸入電話號碼" style="flex:1;">
+                            </div>
+                        </div>
+                        <button class="btn-primary" style="width:100%;" onclick="window.lookupWalletManual()"><i class="fas fa-search"></i> 查詢會員</button>
+                    </div>
+                    <div class="card">
+                        <h3><i class="fas fa-wallet"></i> 確認增值金額</h3>
+                        <div id="topupCustomerBox" style="display:none; background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:16px;">
+                            <div style="font-size:13px; color:var(--text-muted);">會員</div>
+                            <strong id="topupCustomerName" style="font-size:16px;"></strong>
+                            <div style="font-size:13px; color:var(--text-muted); margin-top:8px;">目前餘額</div>
+                            <strong id="topupCustomerBalance" style="color:var(--primary); font-size:16px;"></strong>
+                        </div>
+                        <div class="form-group">
+                            <label>職員確認實收金額 (HK$)</label>
+                            <input type="number" id="topupAmount" min="1" step="1" placeholder="請先掃碼或查詢會員" disabled>
+                        </div>
+                        <button class="btn-primary" id="btnConfirmTopup" style="width:100%;" disabled onclick="window.confirmWalletTopup()"><i class="fas fa-check-circle"></i> 確認增值</button>
+                        <div id="topupResult" class="result-box"></div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -319,11 +357,15 @@
 
         // ---------- 狀態 ----------
         let currentRole = null;
+        let currentUsername = null;
         let html5QrScanner = null;
+        let html5QrScannerTopup = null;
         let listenersStarted = false;
         let liveSchedules = {};
         let liveTickets = {};
         let lastScan = { text: '', at: 0 };
+        let lastTopupScan = { text: '', at: 0 };
+        let topupTarget = null; // { userKey, name }
         window.selectedScheduleIds = new Set();
 
         // ---------- 登入 ----------
@@ -369,6 +411,7 @@
 
         function initDashboard(role, username) {
             currentRole = role;
+            currentUsername = username;
             sessionStorage.setItem('role', role);
             sessionStorage.setItem('username', username);
             document.getElementById('authOverlay').style.display = 'none';
@@ -386,14 +429,15 @@
 
         // ---------- 分頁切換 ----------
         window.switchTab = function(tab) {
-            // 員工只能使用驗票功能
-            if (currentRole === 'staff' && tab !== 'scan') return;
+            // 員工只能使用驗票與銀包增值功能
+            if (currentRole === 'staff' && tab !== 'scan' && tab !== 'topup') return;
 
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
             document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
 
             // 離開掃描頁時關閉鏡頭
             if (tab !== 'scan') stopScanner();
+            if (tab !== 'topup') stopTopupScanner();
 
             if (tab === 'table') {
                 document.getElementById('tabTableView').style.display = 'block';
@@ -413,6 +457,11 @@
                 document.getElementById('btnTabScan').classList.add('active');
                 document.getElementById('pageTitle').textContent = "驗票與車票核銷";
                 initScanner();
+            } else if (tab === 'topup') {
+                document.getElementById('tabTopupView').style.display = 'block';
+                document.getElementById('btnTabTopup').classList.add('active');
+                document.getElementById('pageTitle').textContent = "會員銀包增值";
+                initTopupScanner();
             }
             const activeTab = document.querySelector('.tab-content[style*="block"]');
             if (activeTab) { activeTab.classList.remove('view-anim'); void activeTab.offsetWidth; activeTab.classList.add('view-anim'); }
@@ -713,6 +762,117 @@
             html5QrScanner = null;
             Promise.resolve(s.clear()).catch(() => {});
         }
+
+        // ---------- 會員銀包增值 ----------
+        const makeUserKey = (region, phone) => (region + phone).replace(/\+/g, '');
+
+        function initTopupScanner() {
+            if (html5QrScannerTopup) return;
+            document.getElementById('readerTopup').classList.add('scanning');
+            html5QrScannerTopup = new Html5QrcodeScanner("readerTopup", { fps: 10, qrbox: { width: 220, height: 220 } }, false);
+            html5QrScannerTopup.render((text) => {
+                const now = Date.now();
+                const t = text.trim();
+                if (t === lastTopupScan.text && now - lastTopupScan.at < 3000) return;
+                lastTopupScan = { text: t, at: now };
+                window.verifyWalletQr(t);
+            }, () => {});
+        }
+
+        function stopTopupScanner() {
+            document.getElementById('readerTopup').classList.remove('scanning');
+            resetTopupTarget();
+            if (!html5QrScannerTopup) return;
+            const s = html5QrScannerTopup;
+            html5QrScannerTopup = null;
+            Promise.resolve(s.clear()).catch(() => {});
+        }
+
+        function showTopupResult(cls, html) {
+            const res = document.getElementById('topupResult');
+            res.style.display = 'block';
+            res.className = `result-box ${cls}`;
+            res.innerHTML = html;
+            if (cls) feedback(cls === 'success');
+        }
+
+        function resetTopupTarget() {
+            topupTarget = null;
+            const box = document.getElementById('topupCustomerBox');
+            if (box) box.style.display = 'none';
+            const amt = document.getElementById('topupAmount');
+            if (amt) { amt.disabled = true; amt.value = ''; amt.placeholder = '請先掃碼或查詢會員'; }
+            const btn = document.getElementById('btnConfirmTopup');
+            if (btn) btn.disabled = true;
+        }
+
+        async function loadTopupTarget(userKey) {
+            const snap = await get(child(ref(db), `users/${userKey}`));
+            if (!snap.exists()) { showTopupResult('error', "❌ 查無此會員，請確認電話號碼"); resetTopupTarget(); return false; }
+            const u = snap.val();
+            topupTarget = { userKey, name: u.name };
+            document.getElementById('topupCustomerBox').style.display = 'block';
+            document.getElementById('topupCustomerName').textContent = `${u.name}（${u.region || ''}${u.phone || ''}）`;
+            document.getElementById('topupCustomerBalance').textContent = `HK$ ${Number(u.walletBalance) || 0}`;
+            const amt = document.getElementById('topupAmount');
+            amt.disabled = false; amt.value = ''; amt.placeholder = '例如: 100';
+            document.getElementById('btnConfirmTopup').disabled = false;
+            return true;
+        }
+
+        // 驗證會員出示的動態增值二維碼：WALLET|會員key|10分鐘時間窗|HMAC簽名
+        window.verifyWalletQr = async function(input) {
+            const [tag, userKey, win, sig] = String(input || '').split('|');
+            if (tag !== 'WALLET' || !userKey || !win || !sig) { showTopupResult('error', "❌ 並非有效的增值二維碼"); return; }
+            const res = document.getElementById('topupResult');
+            res.style.display = 'block'; res.className = 'result-box'; res.textContent = "驗證中...";
+            try {
+                const secSnap = await get(child(ref(db), `users/${userKey}/walletSecret`));
+                if (!secSnap.exists()) { showTopupResult('error', "❌ 找不到此會員資料，請改用手動查詢"); return; }
+                const nowW = Math.floor(Date.now() / 600000);
+                const fresh = /^\d+$/.test(win) && Math.abs(nowW - Number(win)) <= 1; // 10 分鐘窗口，容許前後一格時鐘誤差
+                const expectedSig = await hmacHex(secSnap.val(), `${userKey}|${win}`);
+                if (!fresh || sig !== expectedSig) { showTopupResult('error', "❌ 二維碼已過期，請請會員重新整理畫面"); return; }
+                if (await loadTopupTarget(userKey)) showTopupResult('success', "✅ 已驗證會員身份，請輸入實收金額");
+            } catch (e) {
+                showTopupResult('error', "❌ 驗證失敗，請檢查網絡");
+            }
+        };
+
+        // 掃碼不便時的手動查詢（僅按電話尋找帳號，不涉及動態簽名）
+        window.lookupWalletManual = async function() {
+            const region = document.getElementById('topupRegion').value;
+            const phone = document.getElementById('topupPhone').value.trim().replace(/\s+/g, '');
+            if (!phone) { showTopupResult('error', "請輸入電話號碼"); return; }
+            try {
+                if (await loadTopupTarget(makeUserKey(region, phone))) showTopupResult('success', "✅ 已找到會員，請輸入實收金額");
+            } catch (e) {
+                showTopupResult('error', "❌ 查詢失敗，請檢查網絡");
+            }
+        };
+
+        // 職員確認實收款項後，原子式為會員銀包增值並記錄由誰經手
+        window.confirmWalletTopup = async function() {
+            if (!topupTarget) { showTopupResult('error', "請先掃碼或查詢會員"); return; }
+            const amount = Math.floor(Number(document.getElementById('topupAmount').value));
+            if (!Number.isFinite(amount) || amount <= 0) { showTopupResult('error', "請輸入正確的金額"); return; }
+
+            const btn = document.getElementById('btnConfirmTopup');
+            btn.disabled = true;
+            try {
+                const balRef = ref(db, `users/${topupTarget.userKey}/walletBalance`);
+                const result = await runTransaction(balRef, (bal) => (Number(bal) || 0) + amount);
+                const txId = push(ref(db, `users/${topupTarget.userKey}/walletTx`)).key;
+                await set(ref(db, `users/${topupTarget.userKey}/walletTx/${txId}`), { type: 'topup', amount, staffId: currentUsername, at: Date.now() });
+                document.getElementById('topupCustomerBalance').textContent = `HK$ ${result.snapshot.val()}`;
+                showTopupResult('success', `✅ 已成功為 ${esc(topupTarget.name)} 增值 HK$ ${amount}`);
+                document.getElementById('topupAmount').value = '';
+            } catch (e) {
+                showTopupResult('error', "❌ 增值失敗，請檢查網絡或權限");
+            } finally {
+                btn.disabled = false;
+            }
+        };
 
         window.onload = function() {
             const role = sessionStorage.getItem('role');
