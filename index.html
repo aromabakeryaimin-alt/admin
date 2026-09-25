@@ -86,10 +86,13 @@
             .card { padding: 16px; }
             .auth-card { padding: 30px 20px; margin: 15px; }
         }
+        .flash { position: fixed; inset: 0; z-index: 9998; pointer-events: none; opacity: 0; transition: opacity .15s; }
+        .flash.ok { background: rgba(16,185,129,.6); } .flash.bad { background: rgba(239,68,68,.6); } .flash.on { opacity: 1; }
     </style>
 </head>
 <body>
 
+    <div id="flash" class="flash"></div>
     <div id="toastBox" class="toast"></div>
 
     <div id="authOverlay" class="auth-overlay">
@@ -214,6 +217,15 @@
 
             <!-- 分頁 4: 驗票掃描區 -->
             <div id="tabScanView" class="tab-content" style="display: none;">
+                <div class="card" id="todayStatsCard" style="margin-bottom:16px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <strong><i class="fas fa-chart-line"></i> 今日上車進度</strong>
+                        <span id="todayStatsText" style="font-size:13px; color:var(--text-muted);">0 / 0</span>
+                    </div>
+                    <div style="height:8px; background:#e2e8f0; border-radius:4px; overflow:hidden;">
+                        <div id="todayStatsBar" style="height:100%; width:0%; background:var(--primary); transition:width .4s;"></div>
+                    </div>
+                </div>
                 <div class="grid-2">
                     <div class="card">
                         <h3><i class="fas fa-camera"></i> 鏡頭掃描車票</h3>
@@ -265,6 +277,26 @@
             const data = new TextEncoder().encode(str);
             const hashBuffer = await crypto.subtle.digest('SHA-256', data);
             return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+
+        async function hmacHex(secret, msg) {
+            const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+            const sig = await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(msg));
+            return Array.from(new Uint8Array(sig)).slice(0, 5).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // 全螢幕色彩 + 震動 + 提示音，員工不必盯著小字
+        function feedback(ok) {
+            const f = document.getElementById('flash');
+            f.className = `flash ${ok ? 'ok' : 'bad'} on`;
+            setTimeout(() => f.classList.remove('on'), 450);
+            if (navigator.vibrate) navigator.vibrate(ok ? 120 : [80, 60, 80, 60, 200]);
+            try {
+                const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
+                o.frequency.value = ok ? 880 : 220; o.type = ok ? 'sine' : 'square'; g.gain.value = 0.15;
+                o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + (ok ? 0.15 : 0.35));
+            } catch (e) {}
         }
 
         const normTime = (t) => String(t).padStart(5, '0');
@@ -327,13 +359,13 @@
             sessionStorage.setItem('username', username);
             document.getElementById('authOverlay').style.display = 'none';
             document.getElementById('mainDashboard').style.display = 'flex';
+            startRealTimeListeners(); // 員工也需要即時資料以顯示「今日上車進度」
             if (role === 'staff') {
                 ['btnTabTable', 'btnTabSearch', 'btnTabBatch'].forEach(id => document.getElementById(id).style.display = 'none');
                 document.getElementById('currentUserBadge').textContent = `身份: 員工 (${username})`;
                 window.switchTab('scan');
             } else {
                 document.getElementById('currentUserBadge').textContent = `身份: 管理員 (${username})`;
-                startRealTimeListeners();
                 window.switchTab('table');
             }
         }
@@ -376,6 +408,7 @@
             listenersStarted = true;
             const refreshViews = () => {
                 renderLiveTable();
+                renderTodayStats();
                 if (document.getElementById('tabSearchView').style.display === 'block') window.renderSearchTable();
             };
             onValue(ref(db, 'schedules'), (snapshot) => { liveSchedules = snapshot.val() || {}; refreshViews(); });
@@ -393,6 +426,23 @@
         }
 
         const validSchedules = () => Object.values(liveSchedules).filter(s => s && s.id && s.date && s.time);
+
+        // 今日上車進度：以本地日期比對，讓員工掃票時一眼看到今天的整體核銷情況
+        function renderTodayStats() {
+            const bar = document.getElementById('todayStatsBar');
+            if (!bar) return;
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+            const todays = Object.values(liveTickets).filter(t => {
+                if (!t || !t.date) return false;
+                const d = new Date(`${t.date}T00:00:00`);
+                return d >= today && d < tomorrow;
+            });
+            const boarded = todays.filter(t => t.status === 'boarded').length;
+            const total = todays.length;
+            bar.style.width = total ? `${Math.round(boarded / total * 100)}%` : '0%';
+            document.getElementById('todayStatsText').textContent = `${boarded} / ${total} 人已上車`;
+        }
 
         window.handleCheckboxChange = function(cb) {
             if (cb.checked) window.selectedScheduleIds.add(cb.value);
@@ -571,9 +621,11 @@
             res.style.display = 'block';
             res.className = `result-box ${cls}`;
             res.innerHTML = html;
+            feedback(cls === 'success');
         }
 
-        window.verifyTicket = async function(ticketId) {
+        window.verifyTicket = async function(input, fromScan = false) {
+            const [ticketId, win, sig] = String(input || '').split('|'); // 動態 QR：票號|時間窗|簽名
             if (!ticketId) { showResult('error', "請輸入車票編號"); return; }
             // 防止含特殊字元的 QR 內容導致 Firebase 路徑錯誤
             if (!/^[A-Za-z0-9_-]{1,64}$/.test(ticketId)) { showResult('error', "❌ 車票格式不正確"); return; }
@@ -587,6 +639,16 @@
                 const ticketRef = ref(db, `tickets/${ticketId}`);
                 const snap = await get(ticketRef);
                 if (!snap.exists()) { showResult('error', "❌ 查無此票，請確認是否正確"); return; }
+
+                // 掃碼時，凡有簽名密鑰的票必須出示有效的動態 QR（截圖 / 轉發會過期）
+                const tk = snap.val();
+                if (fromScan && tk.secret) {
+                    const nowW = Math.floor(Date.now() / 30000);
+                    const fresh = /^\d+$/.test(win || '') && Math.abs(nowW - Number(win)) <= 1;
+                    if (!fresh || !sig || sig !== await hmacHex(tk.secret, `${ticketId}|${win}`)) {
+                        showResult('error', "❌ 二維碼無效或已過期<br>請乘客出示即時畫面（截圖無效）"); return;
+                    }
+                }
 
                 // 用 transaction 核銷，避免兩位員工同時掃同一張票都成功
                 const result = await runTransaction(ticketRef, (cur) => {
@@ -623,7 +685,7 @@
                 const t = text.trim();
                 if (t === lastScan.text && now - lastScan.at < 3000) return;
                 lastScan = { text: t, at: now };
-                window.verifyTicket(t);
+                window.verifyTicket(t, true);
             }, () => {});
         }
 
