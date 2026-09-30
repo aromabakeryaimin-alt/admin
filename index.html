@@ -17,13 +17,14 @@
         body { margin: 0; background: var(--bg); color: var(--text-main); display: flex; min-height: 100vh; }
 
         .toast {
-            position: fixed; top: -60px; left: 50%; transform: translateX(-50%);
+            position: fixed; top: 20px; left: 50%;
+            transform: translate(-50%, -100px) scale(.95); opacity: 0;
             background: #1e293b; color: white; padding: 12px 24px; border-radius: 30px;
             font-size: 14px; font-weight: 500; box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-            z-index: 9999; transition: all 0.3s ease;
+            z-index: 9999; transition: transform .3s cubic-bezier(.2,1.4,.4,1), opacity .3s ease;
+            pointer-events: none; /* 提示訊息不應攔截畫面上的點擊/輸入 */
         }
-        .toast.show { top: 20px; animation: toastPop .35s cubic-bezier(.2,1.4,.4,1) both; }
-        @keyframes toastPop { 0% { transform: translate(-50%,-16px) scale(.9); opacity: 0; } 60% { transform: translate(-50%,4px) scale(1.03); opacity: 1; } 100% { transform: translate(-50%,0) scale(1); opacity: 1; } }
+        .toast.show { transform: translate(-50%, 0) scale(1); opacity: 1; }
         button { transition: transform .15s ease; }
         button:active { transform: scale(.96); }
         @keyframes rowIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
@@ -111,8 +112,7 @@
     <div id="authOverlay" class="auth-overlay">
         <div class="auth-card">
             <h2><i class="fas fa-bus-alt" style="color:var(--primary);"></i> 瑞里智能購票系統</h2>
-            <div style="font-size:12px; color:var(--text-muted); margin:-8px 0 6px;">🌕 中秋節快樂　後台管理</div>
-            <p>請登入以繼續操作</p>
+            <p style="margin-top:-4px;">後台管理　請登入以繼續操作</p>
             <div class="form-group"><input type="text" id="loginUser" placeholder="帳號 (Admin / P001)"></div>
             <div class="form-group"><input type="password" id="loginPass" placeholder="密碼"></div>
             <button class="btn-primary" id="loginBtn" style="width:100%;" onclick="handleBackendLogin()">登入</button>
@@ -270,6 +270,9 @@
                     <div class="card">
                         <h3><i class="fas fa-camera"></i> 掃描會員增值二維碼</h3>
                         <div id="readerTopup"></div>
+                        <h3 style="margin-top:22px;"><i class="fas fa-wifi"></i> 或拍會員的 NFC 增值卡</h3>
+                        <button class="btn-primary" id="btnTopupNfcToggle" style="width:100%;" onclick="window.toggleTopupNfcReader()"><i class="fas fa-wifi"></i> 啟動 NFC 讀卡感應</button>
+                        <div id="topupNfcStatus" style="margin-top:8px; font-size:13px; color:var(--text-muted); text-align:center;"></div>
                         <div class="form-group" style="margin-top: 20px;">
                             <label>或手動輸入會員電話（無法掃碼時使用）</label>
                             <div style="display:flex; gap:8px;">
@@ -435,7 +438,7 @@
 
         // ---------- 分頁切換 ----------
         window.switchTab = function(tab) {
-            // 員工只能使用驗票與銀包增值功能
+            // 員工可使用驗票與銀包增值功能
             if (currentRole === 'staff' && tab !== 'scan' && tab !== 'topup') return;
 
             document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
@@ -809,6 +812,7 @@
                     const now = Date.now();
                     if (text === lastNfc.text && now - lastNfc.at < 3000) return; // 同一張卡 3 秒內忽略重複觸發
                     lastNfc = { text, at: now };
+                    if (text.startsWith('MEMBER|')) { window.handleMemberTap(text); return; } // 永久會員拍卡卡片，走拍卡收費流程
                     window.verifyTicket(text, true);
                 };
                 reader.onreadingerror = () => { statusEl.textContent = '讀取失敗，請重新拍卡'; };
@@ -818,8 +822,104 @@
             }
         };
 
+        // ---------- 永久會員拍卡卡片（MEMBER|會員key|簽名，沒有時間窗、不會過期） ----------
+        // 說明：這不是真正的 Octopus 式離線交通卡——卡片本身完全不儲存金額，只是一個經簽名確認的身份憑證，
+        // 每次拍卡都要職員的手機連線到資料庫查詢餘額、原子扣款，離線時無法運作。
+        // 因為卡片內容永久不變、沒有加密晶片保護，理論上可以被讀卡器複製到另一張空白卡上冒用，
+        // 這是一般 NFC 貼紙先天的限制，並非系統邏輯的漏洞——請乘客妥善保管卡片，遺失請盡快通知職員停用（見下方停用功能）。
+        window.handleMemberTap = async function(text) {
+            const [tag, userKey, sig] = text.split('|');
+            if (tag !== 'MEMBER' || !userKey || !sig) { showResult('error', '❌ 並非有效的會員拍卡卡片'); return; }
+            try {
+                const [secSnap, userSnap] = await Promise.all([
+                    get(child(ref(db), `users/${userKey}/walletSecret`)),
+                    get(child(ref(db), `users/${userKey}`))
+                ]);
+                if (!secSnap.exists() || !userSnap.exists()) { showResult('error', '❌ 找不到此會員資料'); return; }
+                if (userSnap.val().memberCardRevoked) { showResult('error', '❌ 此拍卡卡片已被會員申報停用，請改用手機二維碼'); return; }
+                const expected = await hmacHex(secSnap.val(), `MEMBER|${userKey}`);
+                if (sig !== expected) { showResult('error', '❌ 卡片簽名無效，可能是偽造或複製的卡片'); return; }
+
+                const name = userSnap.val().name || '會員';
+                const amountStr = prompt(`已識別會員：${name}\n請輸入本次車費金額 (HK$)：`);
+                if (amountStr === null) return; // 職員取消
+                const amount = Math.floor(Number(amountStr));
+                if (!Number.isFinite(amount) || amount <= 0) { showResult('error', '❌ 金額不正確，已取消收費'); return; }
+
+                const balRef = ref(db, `users/${userKey}/walletBalance`);
+                const result = await runTransaction(balRef, (bal) => {
+                    bal = Number(bal) || 0;
+                    if (bal < amount) return; // 中止
+                    return bal - amount;
+                });
+                if (!result.committed) { showResult('error', `❌ ${esc(name)} 的銀包餘額不足，無法拍卡付款`); return; }
+
+                const txId = push(ref(db, `users/${userKey}/walletTx`)).key;
+                await set(ref(db, `users/${userKey}/walletTx/${txId}`), {
+                    type: 'payment', amount, staffId: currentUsername, merchant: '拍卡上車', at: Date.now()
+                });
+                showResult('success', `✅ 已向 ${esc(name)} 拍卡收取車費 HK$ ${amount}`);
+            } catch (e) {
+                showResult('error', '❌ 處理失敗，請檢查網絡或權限');
+            }
+        };
+
         // ---------- 會員銀包增值 ----------
         const makeUserKey = (region, phone) => (region + phone).replace(/\+/g, '');
+        let nfcReaderTopup = null;
+        let lastNfcTopup = { text: '', at: 0 };
+
+        // 拍會員的「增值 NFC 卡」：內容跟增值二維碼完全同一格式，直接丟給同一套 verifyWalletQr() 驗證
+        window.toggleTopupNfcReader = async function() {
+            const btn = document.getElementById('btnTopupNfcToggle');
+            const statusEl = document.getElementById('topupNfcStatus');
+            if (nfcReaderTopup) {
+                nfcReaderTopup = null;
+                btn.innerHTML = '<i class="fas fa-wifi"></i> 啟動 NFC 讀卡感應';
+                statusEl.textContent = '已停止 NFC 感應';
+                return;
+            }
+            if (!('NDEFReader' in window)) {
+                statusEl.textContent = '此裝置或瀏覽器不支援 NFC（需要 Android 手機 + Chrome 瀏覽器）';
+                showToast('此裝置不支援 Web NFC', 'error');
+                return;
+            }
+            try {
+                const reader = new NDEFReader();
+                await reader.scan();
+                nfcReaderTopup = reader;
+                btn.innerHTML = '<i class="fas fa-stop"></i> 停止 NFC 讀卡感應';
+                statusEl.innerHTML = '<i class="fas fa-broadcast-tower"></i> 感應中，請會員把 NFC 卡貼近手機背面...';
+                reader.onreading = (event) => {
+                    if (nfcReaderTopup !== reader) return;
+                    let text = '';
+                    for (const record of event.message.records) {
+                        if (record.recordType === 'text') {
+                            text = new TextDecoder(record.encoding || 'utf-8').decode(record.data);
+                            break;
+                        }
+                    }
+                    text = text.trim();
+                    if (!text) { statusEl.textContent = '讀到空白的 NFC 卡，請重試'; return; }
+                    const now = Date.now();
+                    if (text === lastNfcTopup.text && now - lastNfcTopup.at < 3000) return;
+                    lastNfcTopup = { text, at: now };
+                    window.verifyWalletQr(text);
+                };
+                reader.onreadingerror = () => { statusEl.textContent = '讀取失敗，請重新拍卡'; };
+            } catch (e) {
+                statusEl.textContent = '無法啟動 NFC，請確認已授權權限並使用 https 連線';
+                showToast('啟動 NFC 失敗，請檢查權限設定', 'error');
+            }
+        };
+
+        function stopTopupNfcReader() {
+            nfcReaderTopup = null;
+            const btn = document.getElementById('btnTopupNfcToggle');
+            const statusEl = document.getElementById('topupNfcStatus');
+            if (btn) btn.innerHTML = '<i class="fas fa-wifi"></i> 啟動 NFC 讀卡感應';
+            if (statusEl) statusEl.textContent = '';
+        }
 
         function initTopupScanner() {
             if (html5QrScannerTopup) return;
@@ -837,6 +937,7 @@
         function stopTopupScanner() {
             document.getElementById('readerTopup').classList.remove('scanning');
             resetTopupTarget();
+            stopTopupNfcReader();
             if (!html5QrScannerTopup) return;
             const s = html5QrScannerTopup;
             html5QrScannerTopup = null;
